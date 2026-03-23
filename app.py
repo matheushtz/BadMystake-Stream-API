@@ -12,12 +12,12 @@ DEFAULT_DATA = {"mortes": 0}
 
 APP_BOOT_TIME = int(os.times().elapsed)
 
-
+# Função para verificar se uma variável de ambiente está presente e não vazia
 def env_present(name):
     value = os.environ.get(name)
     return value is not None and value != ""
 
-
+# Função para obter o status das variáveis de ambiente relevantes para a publicação no GitHub
 def get_env_status():
     return {
         "GITHUB_TOKEN": env_present("GITHUB_TOKEN"),
@@ -29,7 +29,7 @@ def get_env_status():
         "PORT": env_present("PORT"),
     }
 
-
+# Função para logar o status das variáveis de ambiente relevantes para a publicação no GitHub
 def log_env_status():
     status = get_env_status()
     print(f"[ENV] status: {status}")
@@ -39,7 +39,7 @@ if not os.path.exists(FILE_PATH):
     with open(FILE_PATH, "w", encoding="utf-8") as f:
         json.dump(DEFAULT_DATA, f, ensure_ascii=False, indent=2)
 
-
+# Lê os dados do arquivo, tentando garantir que seja um dicionário válido. Se o arquivo estiver vazio ou com formato inválido, retorna o valor padrão.
 def load_data():
     with open(FILE_PATH, "r", encoding="utf-8") as f:
         content = f.read().strip()
@@ -66,7 +66,7 @@ def load_data():
 
     return dict(DEFAULT_DATA)
 
-
+# Salva os dados no arquivo local e publica no GitHub (se configurado)
 def get_github_publish_config():
     repository = (os.environ.get("GITHUB_REPOSITORY", "") or "").strip()
     repository_owner = None
@@ -90,7 +90,7 @@ def get_github_publish_config():
         "file_path": os.environ.get("GITHUB_FILE_PATH", "dados.json"),
     }
 
-
+# Publica o conteúdo no GitHub usando a API. O conteúdo deve ser uma string já formatada (ex: JSON).
 def publish_data_to_github(content):
     config = get_github_publish_config()
     token = config["token"]
@@ -166,7 +166,7 @@ def publish_data_to_github(content):
     except Exception as exc:
         print(f"Falha ao publicar dados.json no GitHub: {exc}")
 
-
+# Salva os dados no arquivo local e publica no GitHub (se configurado)
 def save_data(data):
     serialized_data = json.dumps(data, ensure_ascii=False, indent=2)
 
@@ -175,7 +175,7 @@ def save_data(data):
 
     publish_data_to_github(serialized_data)
 
-
+# Tenta converter o valor para int, float, bool ou None. Se não for possível, retorna a string original.
 def parse_value(value):
     if isinstance(value, (int, float, bool)) or value is None:
         return value
@@ -201,7 +201,7 @@ def parse_value(value):
 
     return value
 
-
+# Incrementa o contador de mortes no arquivo e retorna o novo total.
 def increment_deaths_in_file():
     data = load_data()
 
@@ -217,7 +217,7 @@ def increment_deaths_in_file():
 
     return new_total
 
-
+# Decrementa o contador de mortes no arquivo e retorna o novo total.
 def decrement_deaths_in_file():
     data = load_data()
 
@@ -233,7 +233,7 @@ def decrement_deaths_in_file():
 
     return new_total
 
-
+# Lê o valor atual de mortes do arquivo, tentando garantir que seja um inteiro. Se não for possível, retorna 0.
 def get_mortes_value(data):
     raw_value = data.get("mortes", 0)
     try:
@@ -241,7 +241,7 @@ def get_mortes_value(data):
     except (TypeError, ValueError):
         return 0
 
-
+# Endpoint para SALVAR texto
 @app.route("/death/save", methods=["GET", "POST"])
 def save():
     payload = request.get_json(silent=True) or {}
@@ -257,44 +257,43 @@ def save():
 
     return str(get_mortes_value(data))
 
-
-
+# Endpoint para LER o valor atual de mortes
 @app.route("/death/get", methods=["GET"])
 @app.route("/death/read", methods=["GET"])
 def read_text_file():
     data = load_data()
     return str(get_mortes_value(data))
 
-
+# Endpoint para LER o valor atual de mortes em formato de observação (ex: "X mortes")
 @app.route("/death/read/obs", methods=["GET"])
 def read_text_observation():
     data = load_data()
     return f"{get_mortes_value(data)} mortes"
 
-
+# Endpoint opcional para limpar arquivo
 @app.route("/death/clear", methods=["GET"])
 def clear():
     save_data(dict(DEFAULT_DATA))
     return str(DEFAULT_DATA["mortes"])
 
-
+# Endpoint para INCREMENTAR o contador de mortes
 @app.route("/death/increment", methods=["GET", "POST"])
 def increment():
     new_total = increment_deaths_in_file()
     return str(new_total)
 
-
+# Endpoint para DECREMENTAR o contador de mortes
 @app.route("/death/decrement", methods=["GET", "POST"])
 def decrement():
     new_total = decrement_deaths_in_file()
     return str(new_total)
 
-
+# Endpoint raiz para verificar se a API está respondendo
 @app.route("/", methods=["GET", "HEAD"])
 def root():
-    return "ok", 200
+    return "OK", 200
 
-
+# Endpoint para verificar a saúde da API, incluindo uptime (Defina raiz de Health Status Check como /healthz no Render)
 @app.route("/healthz", methods=["GET"])
 def healthz():
     return {
@@ -302,24 +301,17 @@ def healthz():
         "uptime_seconds": max(0, int(os.times().elapsed) - APP_BOOT_TIME),
     }, 200
 
-
-@app.route("/health", methods=["GET", "HEAD"])
-def health():
-    return "ok", 200
-
-
 @app.route("/favicon.ico", methods=["GET"])
 def favicon():
     return "", 204
 
-
+# Endpoint para DEBUG: exibe o status das variáveis de ambiente relevantes para a publicação no GitHub
 @app.route("/debug/env", methods=["GET"])
 def debug_env():
     return {
         "status": "ok",
         "env": get_env_status(),
     }, 200
-
 
 if __name__ == "__main__":
     log_env_status()

@@ -2,6 +2,13 @@
 
 API em Flask para controlar um contador de mortes para live/OBS.
 
+## Ambiente alvo
+
+Esta aplicacao foi pensada para rodar no host do Render.
+
+- Em producao, o Render define automaticamente a porta via variavel `PORT`.
+- O endpoint publico esperado e o do proprio servico Render.
+
 ## O que o programa faz
 
 1. Mantem um contador de mortes em `dados.json`.
@@ -13,7 +20,11 @@ API em Flask para controlar um contador de mortes para live/OBS.
 
 - `app.py`: API principal.
 - `dados.json`: arquivo com o valor atual do contador.
-- `obs_browser_refresh.lua`: script de refresh para Browser Source no OBS.
+- `obs_browser_refresh.lua`: script para ser adicionado dentro do proprio OBS (Tools > Scripts) e forcar o refresh da Browser Source.
+
+## OBS sem plugin WebSocket
+
+O arquivo `obs_browser_refresh.lua` existe para atualizar o Browser Source diretamente dentro do OBS, evitando dependencia do plugin/WebSocket para esse refresh.
 
 ## Como rodar
 
