@@ -68,17 +68,24 @@ def load_data():
 
 
 def get_github_publish_config():
-    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    repository = (os.environ.get("GITHUB_REPOSITORY", "") or "").strip()
     repository_owner = None
     repository_name = None
 
     if "/" in repository:
         repository_owner, repository_name = repository.split("/", 1)
 
+    # Compatibilidade retroativa com variaveis separadas.
+    if not repository_owner:
+        repository_owner = os.environ.get("GITHUB_OWNER")
+
+    if not repository_name:
+        repository_name = os.environ.get("GITHUB_REPO")
+
     return {
         "token": os.environ.get("GITHUB_TOKEN"),
-        "owner": os.environ.get("GITHUB_OWNER") or repository_owner,
-        "repo": os.environ.get("GITHUB_REPO") or repository_name,
+        "owner": repository_owner,
+        "repo": repository_name,
         "branch": os.environ.get("GITHUB_BRANCH", "main"),
         "file_path": os.environ.get("GITHUB_FILE_PATH", "dados.json"),
     }
