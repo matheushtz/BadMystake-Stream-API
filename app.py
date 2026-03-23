@@ -40,7 +40,7 @@ def increment_deaths_in_file():
     return new_total
 
 
-@app.route("/save", methods=["GET", "POST"])
+@app.route("/death/save", methods=["GET", "POST"])
 def save():
     text = request.args.get("text") or request.form.get("text")
 
@@ -53,8 +53,8 @@ def save():
     return {"status": "salvo", "text": text}
 
 
-@app.route("/get", methods=["GET"])
-@app.route("/read", methods=["GET"])
+@app.route("/death/get", methods=["GET"])
+@app.route("/death/read", methods=["GET"])
 def read_text_file():
     with open(FILE_PATH, "r", encoding="utf-8") as f:
         content = f.read()
@@ -62,13 +62,13 @@ def read_text_file():
     return Response(content, mimetype="text/plain")
 
 
-@app.route("/clear", methods=["GET"])
+@app.route("/death/clear", methods=["GET"])
 def clear():
     open(FILE_PATH, "w").close()
     return {"status": "arquivo limpo"}
 
 
-@app.route("/increment", methods=["GET", "POST"])
+@app.route("/death/increment", methods=["GET", "POST"])
 def increment():
     new_total = increment_deaths_in_file()
     return {"status": "incrementado", "mortes": new_total}
