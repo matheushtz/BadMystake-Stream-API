@@ -120,6 +120,12 @@ def read_text_file():
     return str(get_mortes_value(data))
 
 
+@app.route("/death/read/obs", methods=["GET"])
+def read_text_observation():
+    data = load_data()
+    return f"{get_mortes_value(data)} mortes"
+
+
 @app.route("/death/clear", methods=["GET"])
 def clear():
     save_data(dict(DEFAULT_DATA))
