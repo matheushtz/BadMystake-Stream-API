@@ -11,6 +11,35 @@ if not os.path.exists(FILE_PATH):
     open(FILE_PATH, "w").close()
 
 
+def increment_deaths_in_file():
+    with open(FILE_PATH, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    found = False
+    new_total = 1
+
+    for i, line in enumerate(lines):
+        if line.strip().upper().startswith("MORTES:"):
+            raw_value = line.split(":", 1)[1].strip()
+            try:
+                current_total = int(raw_value)
+            except ValueError:
+                current_total = 0
+
+            new_total = current_total + 1
+            lines[i] = f"MORTES: {new_total}\n"
+            found = True
+            break
+
+    if not found:
+        lines.insert(0, f"MORTES: {new_total}\n")
+
+    with open(FILE_PATH, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+    return new_total
+
+
 @app.route("/save", methods=["GET", "POST"])
 def save():
     text = request.args.get("text") or request.form.get("text")
@@ -37,6 +66,12 @@ def read_text_file():
 def clear():
     open(FILE_PATH, "w").close()
     return {"status": "arquivo limpo"}
+
+
+@app.route("/increment", methods=["GET", "POST"])
+def increment():
+    new_total = increment_deaths_in_file()
+    return {"status": "incrementado", "mortes": new_total}
 
 
 if __name__ == "__main__":
