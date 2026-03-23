@@ -1,0 +1,14 @@
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: #fff;
+  font-family: "Arial Black", Arial, sans-serif;
+  font-size: 72px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  text-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.8),
+    0 0 12px rgba(255, 255, 255, 0.35),
+    0 0 24px rgba(0, 0, 0, 0.6);
+}

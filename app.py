@@ -268,7 +268,7 @@ def read_text_file():
 @app.route("/death/read/obs", methods=["GET"])
 def read_text_observation():
     data = load_data()
-    return f"{get_mortes_value(data)} mortes"
+    return f"{get_mortes_value(data)} MORTES"
 
 # Endpoint opcional para limpar arquivo
 @app.route("/death/clear", methods=["GET"])
