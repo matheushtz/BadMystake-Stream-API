@@ -1,6 +1,6 @@
 # BadMystake Stream API
 
-API em Flask para controlar um contador de mortes para live/OBS.
+API em Flask para controlar um contador de mortes para livestream/OBS (em tempo real utilizando comandos de chat Ex: Nightbot !morreu).
 
 ## Ambiente alvo
 
