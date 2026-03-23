@@ -74,6 +74,8 @@ def publish_data_to_github(content):
         print("GitHub publish desativado: configure GITHUB_TOKEN, GITHUB_OWNER e GITHUB_REPO no Render")
         return
 
+    print(f"[GITHUB] Iniciando commit em {owner}/{repo}:{branch}/{file_path}")
+
     encoded_path = parse.quote(file_path, safe="/")
     api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{encoded_path}"
     headers = {
@@ -116,8 +118,16 @@ def publish_data_to_github(content):
             headers=headers,
             method="PUT",
         )
-        with urllib_request.urlopen(req_put, timeout=15):
-            pass
+        with urllib_request.urlopen(req_put, timeout=15) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+            commit_sha = (
+                response_data.get("commit", {}).get("sha")
+                or response_data.get("content", {}).get("sha")
+            )
+            if commit_sha:
+                print(f"[GITHUB] Commit concluido com sucesso: {commit_sha}")
+            else:
+                print("[GITHUB] Commit concluido com sucesso")
     except error.HTTPError as http_err:
         try:
             body = http_err.read().decode("utf-8")
@@ -240,6 +250,16 @@ def healthz():
         "status": "ok",
         "uptime_seconds": max(0, int(os.times().elapsed) - APP_BOOT_TIME),
     }, 200
+
+
+@app.route("/health", methods=["GET", "HEAD"])
+def health():
+    return "ok", 200
+
+
+@app.route("/favicon.ico", methods=["GET"])
+def favicon():
+    return "", 204
 
 
 if __name__ == "__main__":
