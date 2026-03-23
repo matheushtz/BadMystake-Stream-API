@@ -1,6 +1,8 @@
 from flask import Flask, request
+import base64
 import json
 import os
+from urllib import error, parse, request as urllib_request
 
 app = Flask(__name__)
 
@@ -41,9 +43,83 @@ def load_data():
     return dict(DEFAULT_DATA)
 
 
+def get_github_publish_config():
+    return {
+        "token": os.environ.get("GITHUB_TOKEN"),
+        "owner": os.environ.get("GITHUB_OWNER"),
+        "repo": os.environ.get("GITHUB_REPO"),
+        "branch": os.environ.get("GITHUB_BRANCH", "main"),
+        "file_path": os.environ.get("GITHUB_FILE_PATH", "dados.json"),
+    }
+
+
+def publish_data_to_github(content):
+    config = get_github_publish_config()
+    token = config["token"]
+    owner = config["owner"]
+    repo = config["repo"]
+    branch = config["branch"]
+    file_path = config["file_path"]
+
+    if not token or not owner or not repo:
+        print("GitHub publish desativado: configure GITHUB_TOKEN, GITHUB_OWNER e GITHUB_REPO no Render")
+        return
+
+    encoded_path = parse.quote(file_path, safe="/")
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{encoded_path}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "death-counter-api",
+    }
+
+    sha = None
+    get_url = f"{api_url}?ref={parse.quote(branch)}"
+
+    try:
+        req_get = urllib_request.Request(get_url, headers=headers, method="GET")
+        with urllib_request.urlopen(req_get, timeout=10) as response:
+            current_data = json.loads(response.read().decode("utf-8"))
+            sha = current_data.get("sha")
+    except error.HTTPError as http_err:
+        if http_err.code != 404:
+            print(f"Falha ao consultar arquivo no GitHub: {http_err}")
+            return
+    except Exception as exc:
+        print(f"Falha de conexao ao consultar GitHub: {exc}")
+        return
+
+    payload = {
+        "message": "chore: update dados.json",
+        "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+        "branch": branch,
+    }
+
+    if sha:
+        payload["sha"] = sha
+
+    try:
+        req_put = urllib_request.Request(
+            api_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="PUT",
+        )
+        with urllib_request.urlopen(req_put, timeout=15):
+            pass
+    except Exception as exc:
+        print(f"Falha ao publicar dados.json no GitHub: {exc}")
+
+
 def save_data(data):
+    serialized_data = json.dumps(data, ensure_ascii=False, indent=2)
+
     with open(FILE_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write(serialized_data)
+
+    publish_data_to_github(serialized_data)
 
 
 def parse_value(value):
