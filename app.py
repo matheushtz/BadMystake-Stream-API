@@ -88,6 +88,14 @@ def increment_deaths_in_file():
     return new_total
 
 
+def get_mortes_value(data):
+    raw_value = data.get("mortes", 0)
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return 0
+
+
 @app.route("/death/save", methods=["GET", "POST"])
 def save():
     payload = request.get_json(silent=True) or {}
@@ -101,20 +109,21 @@ def save():
     data[str(key)] = parse_value(value)
     save_data(data)
 
-    return {"status": "salvo", "key": key, "value": data[str(key)]}
+    return str(get_mortes_value(data))
 
 
 
 @app.route("/death/get", methods=["GET"])
 @app.route("/death/read", methods=["GET"])
 def read_text_file():
-    return load_data()
+    data = load_data()
+    return str(get_mortes_value(data))
 
 
 @app.route("/death/clear", methods=["GET"])
 def clear():
     save_data(dict(DEFAULT_DATA))
-    return {"status": "arquivo limpo"}
+    return str(DEFAULT_DATA["mortes"])
 
 
 @app.route("/death/increment", methods=["GET", "POST"])
