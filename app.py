@@ -10,6 +10,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FILE_PATH = os.path.join(BASE_DIR, "dados.json")
 DEFAULT_DATA = {"mortes": 0}
 
+APP_BOOT_TIME = int(os.times().elapsed)
+
 # Criar arquivo se nao existir
 if not os.path.exists(FILE_PATH):
     with open(FILE_PATH, "w", encoding="utf-8") as f:
@@ -225,6 +227,19 @@ def clear():
 def increment():
     new_total = increment_deaths_in_file()
     return str(new_total)
+
+
+@app.route("/", methods=["GET", "HEAD"])
+def root():
+    return "ok", 200
+
+
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    return {
+        "status": "ok",
+        "uptime_seconds": max(0, int(os.times().elapsed) - APP_BOOT_TIME),
+    }, 200
 
 
 if __name__ == "__main__":
