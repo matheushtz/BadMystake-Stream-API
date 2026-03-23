@@ -44,10 +44,17 @@ def load_data():
 
 
 def get_github_publish_config():
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    repository_owner = None
+    repository_name = None
+
+    if "/" in repository:
+        repository_owner, repository_name = repository.split("/", 1)
+
     return {
         "token": os.environ.get("GITHUB_TOKEN"),
-        "owner": os.environ.get("GITHUB_OWNER"),
-        "repo": os.environ.get("GITHUB_REPO"),
+        "owner": os.environ.get("GITHUB_OWNER") or repository_owner,
+        "repo": os.environ.get("GITHUB_REPO") or repository_name,
         "branch": os.environ.get("GITHUB_BRANCH", "main"),
         "file_path": os.environ.get("GITHUB_FILE_PATH", "dados.json"),
     }
@@ -109,6 +116,12 @@ def publish_data_to_github(content):
         )
         with urllib_request.urlopen(req_put, timeout=15):
             pass
+    except error.HTTPError as http_err:
+        try:
+            body = http_err.read().decode("utf-8")
+        except Exception:
+            body = "<sem corpo>"
+        print(f"Falha ao publicar dados.json no GitHub: HTTP {http_err.code} - {body}")
     except Exception as exc:
         print(f"Falha ao publicar dados.json no GitHub: {exc}")
 
