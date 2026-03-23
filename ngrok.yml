@@ -1,0 +1,12 @@
+version: 3
+
+agent:
+  update_channel: stable
+
+tunnels:
+  api5000:
+    proto: http
+    addr: 5000
+
+
+#ngrok http 5000
