@@ -1,1 +1,1 @@
-MORTES: 15
+MORTES: 0
