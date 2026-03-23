@@ -218,6 +218,22 @@ def increment_deaths_in_file():
     return new_total
 
 
+def decrement_deaths_in_file():
+    data = load_data()
+
+    raw_current = data.get("mortes", 0)
+    try:
+        current_total = int(raw_current)
+    except (TypeError, ValueError):
+        current_total = 0
+
+    new_total = current_total - 1
+    data["mortes"] = new_total
+    save_data(data)
+
+    return new_total
+
+
 def get_mortes_value(data):
     raw_value = data.get("mortes", 0)
     try:
@@ -265,6 +281,12 @@ def clear():
 @app.route("/death/increment", methods=["GET", "POST"])
 def increment():
     new_total = increment_deaths_in_file()
+    return str(new_total)
+
+
+@app.route("/death/decrement", methods=["GET", "POST"])
+def decrement():
+    new_total = decrement_deaths_in_file()
     return str(new_total)
 
 
