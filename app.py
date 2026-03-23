@@ -12,6 +12,28 @@ DEFAULT_DATA = {"mortes": 0}
 
 APP_BOOT_TIME = int(os.times().elapsed)
 
+
+def env_present(name):
+    value = os.environ.get(name)
+    return value is not None and value != ""
+
+
+def get_env_status():
+    return {
+        "GITHUB_TOKEN": env_present("GITHUB_TOKEN"),
+        "GITHUB_OWNER": env_present("GITHUB_OWNER"),
+        "GITHUB_REPO": env_present("GITHUB_REPO"),
+        "GITHUB_REPOSITORY": env_present("GITHUB_REPOSITORY"),
+        "GITHUB_BRANCH": env_present("GITHUB_BRANCH"),
+        "GITHUB_FILE_PATH": env_present("GITHUB_FILE_PATH"),
+        "PORT": env_present("PORT"),
+    }
+
+
+def log_env_status():
+    status = get_env_status()
+    print(f"[ENV] status: {status}")
+
 # Criar arquivo se nao existir
 if not os.path.exists(FILE_PATH):
     with open(FILE_PATH, "w", encoding="utf-8") as f:
@@ -262,6 +284,15 @@ def favicon():
     return "", 204
 
 
+@app.route("/debug/env", methods=["GET"])
+def debug_env():
+    return {
+        "status": "ok",
+        "env": get_env_status(),
+    }, 200
+
+
 if __name__ == "__main__":
+    log_env_status()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
