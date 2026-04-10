@@ -459,6 +459,14 @@ def twitch_eventsub_subscribe():
 def obs_powerup_page():
     return send_from_directory(BASE_DIR, "obs_powerup.html")
 
+@app.route("/obs/powerup.js", methods=["GET"])
+def obs_powerup_script():
+    return send_from_directory(BASE_DIR, "obs_powerup.js")
+
+@app.route("/obs/powerup.css", methods=["GET"])
+def obs_powerup_styles():
+    return send_from_directory(BASE_DIR, "obs_powerup.css")
+
 # Arquivo de audio para a webpage do OBS.
 @app.route("/obs/nossa.mp3", methods=["GET"])
 def obs_powerup_audio():

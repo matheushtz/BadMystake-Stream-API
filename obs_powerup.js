@@ -1,0 +1,131 @@
+var tempoAniPadrao = 2000;
+var audio = new Audio("/ogg/nossa.ogg");
+audio.volume = 0.6;
+audio.preload = "auto";
+
+var listaPedidos = [];
+var stateUrl = "/twitch/powerup/state";
+var pollIntervalMs = 1200;
+var lastSeq = null;
+
+function sleepTime(timeMs) {
+    return new Promise(function (resolve) {
+        setTimeout(function () {
+            resolve();
+        }, timeMs);
+    });
+}
+
+function playAnimation(direc) {
+    var anchor = document.getElementById("anchor");
+    var box = document.getElementById("box");
+
+    anchor.removeAttribute("style");
+    anchor.className = "";
+    box.className = "";
+
+    void box.offsetWidth;
+
+    if (direc === 0) {
+        anchor.classList.add("anchorAniIn");
+        box.classList.add("boxAniIn");
+    } else {
+        anchor.classList.add("anchorAniOut");
+        box.classList.add("boxAniOut");
+    }
+}
+
+async function tryPlayAudio() {
+    try {
+        audio.currentTime = 0;
+        await audio.play();
+        return true;
+    } catch (err) {
+        console.log("[OBS] Falha ao tocar audio, tentando recarregar:", err);
+        try {
+            audio.load();
+            await sleepTime(100);
+            audio.currentTime = 0;
+            await audio.play();
+            return true;
+        } catch (err2) {
+            console.log("[OBS] Reproducao bloqueada:", err2);
+            return false;
+        }
+    }
+}
+
+async function pollState() {
+    try {
+        var response = await fetch(stateUrl, { cache: "no-store" });
+        if (!response.ok) {
+            return;
+        }
+
+        var data = await response.json();
+        var seq = Number(data.seq || 0);
+        var reward = String(data.last_reward || "Goleiro");
+
+        if (lastSeq === null) {
+            lastSeq = seq;
+            return;
+        }
+
+        if (seq > lastSeq) {
+            for (var i = 0; i < seq - lastSeq; i++) {
+                listaPedidos.push({
+                    title: reward,
+                    userName: "Power-up"
+                });
+            }
+        }
+
+        lastSeq = seq;
+    } catch (error) {
+        console.log("[OBS] Erro no polling:", error);
+    }
+}
+
+async function lista() {
+    while (true) {
+        if (listaPedidos.length > 0) {
+            var pedido = listaPedidos.shift();
+
+            document.getElementById("nome").textContent = pedido.userName;
+            document.getElementById("acao").textContent = pedido.title;
+
+            var sleepT = tempoAniPadrao + 1200;
+            if (audio.duration && !isNaN(audio.duration) && audio.duration > 0) {
+                var audioMs = audio.duration * 1000;
+                if (audioMs > sleepT) {
+                    sleepT = audioMs - 300;
+                }
+            }
+
+            playAnimation(0);
+            await tryPlayAudio();
+            await sleepTime(sleepT);
+            playAnimation(1);
+            await sleepTime(900);
+
+            document.getElementById("anchor").style.display = "none";
+        } else {
+            await sleepTime(700);
+        }
+    }
+}
+
+function iniciar() {
+    var animation = document.getElementById("animation");
+    if (animation) {
+        animation.style.display = "block";
+    }
+
+    setInterval(pollState, pollIntervalMs);
+    pollState();
+    lista();
+}
+
+window.addEventListener("load", function () {
+    iniciar();
+});

@@ -3,59 +3,26 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OBS Power-up Listener</title>
-  <style>
-    html, body {
-      margin: 0;
-      width: 100%;
-      height: 100%;
-      background: transparent;
-      overflow: hidden;
-    }
-  </style>
+  <title>Power-up Notification</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/obs/powerup.css" />
 </head>
 <body>
-  <audio id="powerupAudio" preload="auto" src="/ogg/nossa.ogg"></audio>
+  <div id="animation" style="display:none">
+    <div id="anchor" style="display:none">
+      <div id="box">
+        <img id="img" src="https://static-cdn.jtvnw.net/community-goal-images/default-2.png" alt="reward" />
+        <div id="text">
+          <p id="nome">Power-up</p>
+          <p id="acao">Goleiro</p>
+        </div>
+      </div>
+    </div>
+  </div>
 
-  <script>
-    (function () {
-      const POLL_INTERVAL_MS = 1200;
-      const stateUrl = "/twitch/powerup/state";
-      const audio = document.getElementById("powerupAudio");
-
-      let lastSeq = null;
-
-      async function pollState() {
-        try {
-          const response = await fetch(stateUrl, { cache: "no-store" });
-          if (!response.ok) {
-            return;
-          }
-
-          const data = await response.json();
-          const seq = Number(data.seq || 0);
-
-          if (lastSeq === null) {
-            lastSeq = seq;
-            return;
-          }
-
-          if (seq > lastSeq) {
-            lastSeq = seq;
-            audio.currentTime = 0;
-            await audio.play();
-            return;
-          }
-
-          lastSeq = seq;
-        } catch (error) {
-          // Mantem polling silencioso para uso em browser source do OBS.
-        }
-      }
-
-      setInterval(pollState, POLL_INTERVAL_MS);
-      pollState();
-    })();
-  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+  <script src="/obs/powerup.js"></script>
 </body>
 </html>
