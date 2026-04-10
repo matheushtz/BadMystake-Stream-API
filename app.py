@@ -79,14 +79,46 @@ def trigger_powerup_test(label="TESTE"):
         "source": "manual-test",
     })
 
+def get_twitch_app_access_token(client_id, client_secret):
+    token_url = "https://id.twitch.tv/oauth2/token"
+    form_data = parse.urlencode({
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "grant_type": "client_credentials",
+    }).encode("utf-8")
+
+    req = urllib_request.Request(
+        token_url,
+        data=form_data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+
+    with urllib_request.urlopen(req, timeout=15) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+        return payload.get("access_token")
+
 def create_twitch_eventsub_subscription(base_url):
-    token = (os.environ.get("TWITCH_TOKEN", "") or "").strip()
     client_id = (os.environ.get("TWITCH_DEV_ID", "") or "").strip()
     channel_id = (os.environ.get("TWITCH_CHANNEL_ID", "") or "").strip()
     secret = twitch_webhook_secret()
 
-    if not token or not client_id or not channel_id or not secret:
-        return {"ok": False, "error": "Configure TWITCH_CHANNEL_ID, TWITCH_DEV_ID, TWITCH_SECRET e TWITCH_TOKEN"}
+    if not client_id or not channel_id or not secret:
+        return {"ok": False, "error": "Configure TWITCH_CHANNEL_ID, TWITCH_DEV_ID e TWITCH_SECRET"}
+
+    try:
+        token = get_twitch_app_access_token(client_id, secret)
+    except error.HTTPError as http_err:
+        try:
+            body_text = http_err.read().decode("utf-8")
+        except Exception:
+            body_text = "<sem corpo>"
+        return {"ok": False, "error": f"Token app HTTP {http_err.code} - {body_text}"}
+    except Exception as exc:
+        return {"ok": False, "error": f"Falha ao gerar token app: {exc}"}
+
+    if not token:
+        return {"ok": False, "error": "Nao foi possivel obter app access token"}
 
     callback_url = f"{base_url}/twitch/eventsub"
     body = {
