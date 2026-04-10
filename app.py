@@ -58,8 +58,6 @@ def get_env_status():
         "TWITCH_WEBHOOK_SECRET": env_present("TWITCH_WEBHOOK_SECRET"),
         "TWITCH_CLIENT_ID": env_present("TWITCH_CLIENT_ID"),
         "TWITCH_CLIENT_SECRET": env_present("TWITCH_CLIENT_SECRET"),
-        "TWITCH_TARGET_REWARD_ID": env_present("TWITCH_TARGET_REWARD_ID"),
-        "TWITCH_TARGET_REWARD_TITLE": env_present("TWITCH_TARGET_REWARD_TITLE"),
         "PORT": env_present("PORT"),
     }
 
@@ -75,13 +73,13 @@ def get_first_env(*names):
 
 def twitch_webhook_secret():
     # Segredo do webhook EventSub (assinatura HMAC).
-    return get_first_env("TWITCH_WEBHOOK_SECRET")
+    return get_first_env("TWITCH_WEBHOOK_SECRET", "TWITCH_SECRET")
 
 def twitch_client_id():
-    return get_first_env("TWITCH_DEV_ID")
+    return get_first_env("TWITCH_DEV_ID", "TWITCH_CLIENT_ID")
 
 def twitch_client_secret():
-    return get_first_env("TWITCH_SECRET")
+    return get_first_env("TWITCH_SECRET", "TWITCH_CLIENT_SECRET")
 
 def twitch_access_token():
     client_id = twitch_client_id()
@@ -108,19 +106,7 @@ def is_valid_twitch_timestamp(timestamp_raw):
     return delta <= 600
 
 def should_process_reward(reward):
-    reward_id = str(reward.get("id", "")).strip()
-    reward_title = str(reward.get("title", "")).strip()
-
-    target_id = (os.environ.get("TWITCH_TARGET_REWARD_ID", "") or "").strip()
-    target_title = (os.environ.get("TWITCH_TARGET_REWARD_TITLE", "") or "").strip()
-
-    if target_id:
-        return reward_id == target_id
-
-    if target_title:
-        return reward_title.lower() == target_title.lower()
-
-    # Sem alvo configurado, processa todos os resgates.
+    # Processa todos os resgates sem filtro por variavel de ambiente.
     return True
 
 def get_sound_file_for_reward(reward_id):
@@ -206,10 +192,20 @@ def create_twitch_eventsub_subscription(base_url):
     channel_id = (os.environ.get("TWITCH_CHANNEL_ID", "") or "").strip()
     webhook_secret = twitch_webhook_secret()
 
-    if not client_id or not channel_id or not webhook_secret:
+    missing = []
+    if not channel_id:
+        missing.append("TWITCH_CHANNEL_ID")
+    if not client_id:
+        missing.append("TWITCH_DEV_ID/TWITCH_CLIENT_ID")
+    if not client_secret:
+        missing.append("TWITCH_SECRET/TWITCH_CLIENT_SECRET")
+    if not webhook_secret:
+        missing.append("TWITCH_WEBHOOK_SECRET (ou TWITCH_SECRET)")
+
+    if missing:
         return {
             "ok": False,
-            "error": "Configure TWITCH_CHANNEL_ID, TWITCH_DEV_ID, TWITCH_SECRET e TWITCH_WEBHOOK_SECRET",
+            "error": "Configure variaveis: " + ", ".join(missing),
         }
 
     try:
