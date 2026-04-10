@@ -4,6 +4,8 @@ import hashlib
 import hmac
 import json
 import os
+import time
+from datetime import datetime, timezone
 from urllib import error, parse, request as urllib_request
 
 app = Flask(__name__)
@@ -31,6 +33,10 @@ POWERUP_EVENT_STATE = {
     "last_event": None,
 }
 
+# Controle simples de deduplicacao de mensagens do EventSub.
+LAST_EVENT_IDS = set()
+MAX_EVENT_IDS = 5000
+
 # Função para verificar se uma variável de ambiente está presente e não vazia
 def env_present(name):
     value = os.environ.get(name)
@@ -46,9 +52,14 @@ def get_env_status():
         "GITHUB_BRANCH": env_present("GITHUB_BRANCH"),
         "GITHUB_FILE_PATH": env_present("GITHUB_FILE_PATH"),
         "TWITCH_CHANNEL_ID": env_present("TWITCH_CHANNEL_ID"),
+        "TWITCH_CLIENT_ID": env_present("TWITCH_CLIENT_ID"),
+        "TWITCH_CLIENT_SECRET": env_present("TWITCH_CLIENT_SECRET"),
+        "TWITCH_WEBHOOK_SECRET": env_present("TWITCH_WEBHOOK_SECRET"),
         "TWITCH_DEV_ID": env_present("TWITCH_DEV_ID"),
         "TWITCH_SECRET": env_present("TWITCH_SECRET"),
         "TWITCH_TOKEN": env_present("TWITCH_TOKEN"),
+        "TWITCH_TARGET_REWARD_ID": env_present("TWITCH_TARGET_REWARD_ID"),
+        "TWITCH_TARGET_REWARD_TITLE": env_present("TWITCH_TARGET_REWARD_TITLE"),
         "PORT": env_present("PORT"),
     }
 
@@ -56,7 +67,55 @@ def get_public_base_url():
     return (os.environ.get("PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
 
 def twitch_webhook_secret():
-    return (os.environ.get("TWITCH_SECRET", "") or "").strip()
+    # Segredo do webhook EventSub (assinatura HMAC).
+    return (os.environ.get("TWITCH_WEBHOOK_SECRET", "") or "").strip()
+
+def twitch_client_id():
+    return (
+        (os.environ.get("TWITCH_CLIENT_ID", "") or "").strip()
+        or (os.environ.get("TWITCH_DEV_ID", "") or "").strip()
+    )
+
+def twitch_client_secret():
+    return (os.environ.get("TWITCH_CLIENT_SECRET", "") or "").strip()
+
+def is_valid_twitch_timestamp(timestamp_raw):
+    if not timestamp_raw:
+        return False
+
+    try:
+        parsed = datetime.fromisoformat(timestamp_raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    delta = abs(time.time() - parsed.timestamp())
+    return delta <= 600
+
+def should_process_reward(reward):
+    reward_id = str(reward.get("id", "")).strip()
+    reward_title = str(reward.get("title", "")).strip()
+
+    target_id = (os.environ.get("TWITCH_TARGET_REWARD_ID", "") or "").strip()
+    target_title = (os.environ.get("TWITCH_TARGET_REWARD_TITLE", "") or "").strip()
+
+    if target_id:
+        return reward_id == target_id
+
+    if target_title:
+        return reward_title.lower() == target_title.lower()
+
+    # Sem alvo configurado, processa todos os resgates.
+    return True
+
+def get_sound_file_for_reward(reward_id):
+    """Retorna o arquivo de som (sound_file) baseado no reward_id."""
+    # Validação: reward_id específico deve tocar nossa.ogg
+    if reward_id == "69a918e0-6ed7-461a-b76e-e8f4324cb66a":
+        return "nossa.ogg"
+    return None
 
 def verify_twitch_signature(raw_body):
     message_id = request.headers.get("Twitch-Eventsub-Message-Id", "")
@@ -78,6 +137,14 @@ def verify_twitch_signature(raw_body):
 def mark_powerup_trigger(event_payload):
     POWERUP_EVENT_STATE["seq"] += 1
     POWERUP_EVENT_STATE["last_reward"] = event_payload.get("reward", {}).get("title")
+    
+    # Se o evento não tiver sound_file, tenta determinar baseado no reward_id
+    if "sound_file" not in event_payload:
+        reward_id = str(event_payload.get("reward", {}).get("id", "")).strip()
+        sound_file = get_sound_file_for_reward(reward_id)
+        if sound_file:
+            event_payload["sound_file"] = sound_file
+    
     POWERUP_EVENT_STATE["last_event"] = event_payload
 
 def trigger_powerup_test(label="TESTE"):
@@ -121,15 +188,19 @@ def get_twitch_app_access_token(client_id, client_secret):
         return payload.get("access_token")
 
 def create_twitch_eventsub_subscription(base_url):
-    client_id = (os.environ.get("TWITCH_DEV_ID", "") or "").strip()
+    client_id = twitch_client_id()
+    client_secret = twitch_client_secret()
     channel_id = (os.environ.get("TWITCH_CHANNEL_ID", "") or "").strip()
-    secret = twitch_webhook_secret()
+    webhook_secret = twitch_webhook_secret()
 
-    if not client_id or not channel_id or not secret:
-        return {"ok": False, "error": "Configure TWITCH_CHANNEL_ID, TWITCH_DEV_ID e TWITCH_SECRET"}
+    if not client_id or not client_secret or not channel_id or not webhook_secret:
+        return {
+            "ok": False,
+            "error": "Configure TWITCH_CHANNEL_ID, TWITCH_CLIENT_ID, TWITCH_CLIENT_SECRET e TWITCH_WEBHOOK_SECRET",
+        }
 
     try:
-        token = get_twitch_app_access_token(client_id, secret)
+        token = get_twitch_app_access_token(client_id, client_secret)
     except error.HTTPError as http_err:
         try:
             body_text = http_err.read().decode("utf-8")
@@ -152,7 +223,7 @@ def create_twitch_eventsub_subscription(base_url):
         "transport": {
             "method": "webhook",
             "callback": callback_url,
-            "secret": secret,
+            "secret": webhook_secret,
         },
     }
 
@@ -469,27 +540,43 @@ def debug_env():
 @app.route("/twitch/eventsub", methods=["POST"])
 def twitch_eventsub_webhook():
     raw_body = request.get_data() or b""
+    message_id = (request.headers.get("Twitch-Eventsub-Message-Id", "") or "").strip()
+    message_timestamp = (request.headers.get("Twitch-Eventsub-Message-Timestamp", "") or "").strip()
     message_type = (request.headers.get("Twitch-Eventsub-Message-Type", "") or "").strip().lower()
+
+    if not is_valid_twitch_timestamp(message_timestamp):
+        print(f"[TWITCH] Timestamp invalido: {message_timestamp}", flush=True)
+        return {"error": "Timestamp Twitch invalido/expirado"}, 403
+
+    if not verify_twitch_signature(raw_body):
+        return {"error": "Assinatura Twitch invalida"}, 403
+
+    if message_id in LAST_EVENT_IDS:
+        print(f"[TWITCH] Evento duplicado ignorado: {message_id}", flush=True)
+        return {"status": "duplicate"}, 200
+
+    LAST_EVENT_IDS.add(message_id)
+    if len(LAST_EVENT_IDS) > MAX_EVENT_IDS:
+        LAST_EVENT_IDS.clear()
+        LAST_EVENT_IDS.add(message_id)
 
     if message_type == "webhook_callback_verification":
         payload = request.get_json(silent=True) or {}
         challenge = payload.get("challenge", "")
         return Response(challenge, status=200, mimetype="text/plain")
 
-    if not verify_twitch_signature(raw_body):
-        return {"error": "Assinatura Twitch invalida"}, 403
-
     if message_type == "notification":
         payload = request.get_json(silent=True) or {}
         event = payload.get("event", {}) if isinstance(payload.get("event", {}), dict) else {}
         reward = event.get("reward", {}) if isinstance(event.get("reward", {}), dict) else {}
         reward_title = str(reward.get("title", "")).strip()
+        reward_id = str(reward.get("id", "")).strip()
 
-        mark_powerup_trigger(event)
-        if reward_title:
-            print(f"[TWITCH] Resgate recebido: {reward_title}")
+        if should_process_reward(reward):
+            mark_powerup_trigger(event)
+            print(f"[TWITCH] Resgate processado id={reward_id} title={reward_title}", flush=True)
         else:
-            print("[TWITCH] Resgate recebido")
+            print(f"[TWITCH] Resgate ignorado id={reward_id} title={reward_title}", flush=True)
 
         return {"status": "ok"}, 200
 
