@@ -19,10 +19,10 @@ var lastSeq = null;
 
 var REWARD_ID_PLOL = "60863459-5e25-42d2-a49d-7a79fd13bf78";
 var REWARD_ID_GOLEIRO = "69a918e0-6ed7-461a-b76e-e8f4324cb66a";
-var REWARD_AUDIO_MAP = {
+var SOURCE_AUDIO_MAP = {
     "death-increment": "/ogg/morreu.ogg",
-    "69a918e0-6ed7-461a-b76e-e8f4324cb66a": "/ogg/nossa.ogg",
-    "60863459-5e25-42d2-a49d-7a79fd13bf78": "/ogg/plol.ogg"
+    "death-decrement": "/ogg/morreu.ogg",
+    "manual-test": "/ogg/nossa.ogg"
 };
 
 function normalizeId(value) {
@@ -36,7 +36,7 @@ function registerRewardAudio(rewardId, audioPath) {
         return;
     }
 
-    REWARD_AUDIO_MAP[normalizedRewardId] = audioPath;
+    SOURCE_AUDIO_MAP[normalizedRewardId] = audioPath;
 }
 
 registerRewardAudio(REWARD_ID_PLOL, "/ogg/plol.ogg");
@@ -48,17 +48,28 @@ function buildSoundPath(pedido) {
         return null;
     }
 
-    if (!pedido.reward || typeof pedido.reward !== "object" || !pedido.reward.id) {
-        console.log("[DEBUG] buildSoundPath - reward.id ausente, ignorando");
+    var bodySoundFile = String(pedido.sound_file || "").trim();
+    if (bodySoundFile) {
+        var normalizedFile = bodySoundFile.toLowerCase();
+        if (normalizedFile.endsWith(".ogg")) {
+            var directPath = "/ogg/" + bodySoundFile.split("/").pop();
+            console.log("[DEBUG] buildSoundPath - usando sound_file do corpo:", directPath);
+            return directPath;
+        }
+
+        console.log("[DEBUG] buildSoundPath - sound_file inválido, ignorando:", bodySoundFile);
         return null;
     }
 
     var source = normalizeId(pedido.source);
-    var rewardId = normalizeId(pedido.reward.id);
+    if (!source) {
+        console.log("[DEBUG] buildSoundPath - sem sound_file e sem source, ignorando");
+        return null;
+    }
 
-    console.log("[DEBUG] buildSoundPath - source:", source, "rewardId:", rewardId);
+    console.log("[DEBUG] buildSoundPath - source:", source);
 
-    var audioPath = REWARD_AUDIO_MAP[source] || REWARD_AUDIO_MAP[rewardId];
+    var audioPath = SOURCE_AUDIO_MAP[source];
 
     if (audioPath) {
         console.log("[DEBUG] -> retorna áudio configurado:", audioPath);
