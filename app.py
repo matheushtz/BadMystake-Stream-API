@@ -115,7 +115,7 @@ def get_sound_file_for_reward(reward_id):
     normalized_reward_id = str(reward_id or "").strip().lower()
 
     # Validação: reward_id específico deve tocar nossa.ogg
-    if normalized_reward_id == "69a918e0-6ed7-461a-b76e-e8f4324cb66a":
+    if normalized_reward_id == REWARD_ID_GOLEIRO.lower():
         return "nossa.ogg"
     return None
 
@@ -167,6 +167,19 @@ def trigger_death_increment_event(total_value):
         "user_input": str(total_value),
         "sound_file": "morreu.ogg",
         "source": "death-increment",
+    })
+
+def trigger_death_decrement_event(total_value):
+    mark_powerup_trigger({
+        "reward": {
+            "id": "death-decrement",
+            "title": "Morreu",
+            "background_color": "#b30000",
+        },
+        "user_name": "Contador",
+        "user_input": str(total_value),
+        "sound_file": "morreu.ogg",
+        "source": "death-decrement",
     })
 
 def get_twitch_app_access_token(client_id, client_secret):
@@ -524,6 +537,7 @@ def increment():
 @app.route("/death/decrement", methods=["GET", "POST"])
 def decrement():
     new_total = decrement_deaths_in_file()
+    trigger_death_decrement_event(new_total)
     return str(new_total)
 
 # Endpoint raiz para verificar se a API está respondendo
