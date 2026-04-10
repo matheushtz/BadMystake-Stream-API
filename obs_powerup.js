@@ -1,18 +1,23 @@
 var nossa = new Audio("/ogg/nossa.ogg");
 var morreu = new Audio("/ogg/morreu.ogg");
+var plol = new Audio("/ogg/plol.ogg");
 var activeAudio = nossa;
 
-nossa.volume = 0.6;
+nossa.volume = 1;
 nossa.preload = "auto";
 
-morreu.volume = 0.8;
+morreu.volume = 1;
 morreu.preload = "auto";
+
+plol.volume = 1;
+plol.preload = "auto";
 
 var listaPedidos = [];
 var stateUrl = "/twitch/powerup/state";
 var pollIntervalMs = 1200;
 var lastSeq = null;
 
+var REWARD_ID_PLOL = "60863459-5e25-42d2-a49d-7a79fd13bf78";
 var REWARD_ID_GOLEIRO = "69a918e0-6ed7-461a-b76e-e8f4324cb66a";
 
 function normalizeId(value) {
@@ -33,6 +38,11 @@ function buildSoundPath(pedido) {
     if (rewardId === normalizeId(REWARD_ID_GOLEIRO)) {
         console.log("[DEBUG] -> retorna nossa.ogg (goleiro)");
         return "/ogg/nossa.ogg";
+    }
+
+    if (rewardId === normalizeId(REWARD_ID_PLOL)) {
+        console.log("[DEBUG] -> retorna plol.ogg (p lol)");
+        return "/ogg/plol.ogg";
     }
 
     console.log("[DEBUG] -> retorna nossa.ogg (fallback)");
@@ -70,9 +80,10 @@ async function tryPlayAudio() {
 
 function setAudioSource(path) {
     var isMorreu = path.indexOf("/ogg/morreu.ogg") !== -1;
-    activeAudio = isMorreu ? morreu : nossa;
+    var isPlol = path.indexOf("/ogg/plol.ogg") !== -1;
+    activeAudio = isMorreu ? morreu : (isPlol ? plol : nossa);
 
-    console.log("[DEBUG] setAudioSource - path:", path, "-> usando:", isMorreu ? "morreu" : "nossa");
+    console.log("[DEBUG] setAudioSource - path:", path, "-> usando:", isMorreu ? "morreu" : (isPlol ? "plol" : "nossa"));
 
     if (activeAudio.src.indexOf(path) !== -1) {
         console.log("[DEBUG] Audio já carregado, retornando");
