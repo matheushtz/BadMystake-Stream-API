@@ -10,6 +10,14 @@ var lastSeq = null;
 var cdPadrao = 10;
 var cdUser = {};
 
+function buildSoundPath(pedido) {
+    var fileName = pedido && pedido.sound_file ? String(pedido.sound_file).trim() : "";
+    if (!fileName) {
+        return "/ogg/nossa.ogg";
+    }
+    return "/ogg/" + fileName;
+}
+
 function parseImageUrl(reward) {
     if (reward && reward.image && reward.image.url_4x) {
         return reward.image.url_4x;
@@ -88,6 +96,14 @@ async function tryPlayAudio() {
     }
 }
 
+function setAudioSource(path) {
+    if (audio.src.indexOf(path) !== -1) {
+        return;
+    }
+    audio.src = path;
+    audio.load();
+}
+
 async function pollState() {
     try {
         var response = await fetch(stateUrl, { cache: "no-store" });
@@ -135,6 +151,8 @@ async function lista() {
             if (userInput) {
                 document.getElementById("acao").textContent = "ID: " + rewardId + " - " + userInput;
             }
+
+            setAudioSource(buildSoundPath(pedido));
 
             await loadImage(document.getElementById("img"), imageUrl);
 

@@ -79,6 +79,19 @@ def trigger_powerup_test(label="TESTE"):
         "source": "manual-test",
     })
 
+def trigger_death_increment_event(total_value):
+    mark_powerup_trigger({
+        "reward": {
+            "id": "death-increment",
+            "title": "Morreu",
+            "background_color": "#b30000",
+        },
+        "user_name": "Contador",
+        "user_input": str(total_value),
+        "sound_file": "morreu.ogg",
+        "source": "death-increment",
+    })
+
 def get_twitch_app_access_token(client_id, client_secret):
     token_url = "https://id.twitch.tv/oauth2/token"
     form_data = parse.urlencode({
@@ -409,6 +422,7 @@ def clear():
 @app.route("/death/increment", methods=["GET", "POST"])
 def increment():
     new_total = increment_deaths_in_file()
+    trigger_death_increment_event(new_total)
     return str(new_total)
 
 # Endpoint para DECREMENTAR o contador de mortes
@@ -532,6 +546,10 @@ def obs_powerup_audio():
 @app.route("/ogg/nossa.ogg", methods=["GET"])
 def obs_powerup_audio_ogg():
     return send_from_directory(OGG_DIR, "nossa.ogg")
+
+@app.route("/ogg/morreu.ogg", methods=["GET"])
+def obs_powerup_audio_morreu_ogg():
+    return send_from_directory(OGG_DIR, "morreu.ogg")
 
 if __name__ == "__main__":
     log_env_status()
