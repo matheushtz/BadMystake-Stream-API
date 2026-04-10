@@ -10,6 +10,7 @@ app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FILE_PATH = os.path.join(BASE_DIR, "dados.json")
+OGG_DIR = os.path.join(BASE_DIR, "ogg")
 DEFAULT_DATA = {"mortes": 0}
 
 APP_BOOT_TIME = int(os.times().elapsed)
@@ -461,7 +462,14 @@ def obs_powerup_page():
 # Arquivo de audio para a webpage do OBS.
 @app.route("/obs/nossa.mp3", methods=["GET"])
 def obs_powerup_audio():
-    return send_from_directory(BASE_DIR, "nossa.mp3")
+    # Compatibilidade: se nao houver mp3, usa o ogg padrao.
+    if os.path.exists(os.path.join(BASE_DIR, "nossa.mp3")):
+        return send_from_directory(BASE_DIR, "nossa.mp3")
+    return send_from_directory(OGG_DIR, "nossa.ogg")
+
+@app.route("/ogg/nossa.ogg", methods=["GET"])
+def obs_powerup_audio_ogg():
+    return send_from_directory(OGG_DIR, "nossa.ogg")
 
 if __name__ == "__main__":
     log_env_status()
