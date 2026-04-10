@@ -20,6 +20,7 @@ GOLEIRO_REWARD_TITLE = "goleiro"
 POWERUP_EVENT_STATE = {
     "seq": 0,
     "last_reward": None,
+    "last_event": None,
 }
 
 # Função para verificar se uma variável de ambiente está presente e não vazia
@@ -66,9 +67,10 @@ def verify_twitch_signature(raw_body):
     ).hexdigest()
     return hmac.compare_digest(expected_signature, provided_signature)
 
-def mark_powerup_trigger(reward_title):
+def mark_powerup_trigger(event_payload):
     POWERUP_EVENT_STATE["seq"] += 1
-    POWERUP_EVENT_STATE["last_reward"] = reward_title
+    POWERUP_EVENT_STATE["last_reward"] = event_payload.get("reward", {}).get("title")
+    POWERUP_EVENT_STATE["last_event"] = event_payload
 
 def create_twitch_eventsub_subscription(base_url):
     token = (os.environ.get("TWITCH_TOKEN", "") or "").strip()
@@ -422,7 +424,7 @@ def twitch_eventsub_webhook():
         reward_title = str(reward.get("title", "")).strip()
 
         if reward_title.lower() == GOLEIRO_REWARD_TITLE:
-            mark_powerup_trigger(reward_title)
+            mark_powerup_trigger(event)
             print(f"[TWITCH] Power-up recebido: {reward_title}")
         else:
             print(f"[TWITCH] Resgate ignorado: {reward_title}")
@@ -441,6 +443,7 @@ def twitch_powerup_state():
     return {
         "seq": POWERUP_EVENT_STATE["seq"],
         "last_reward": POWERUP_EVENT_STATE["last_reward"],
+        "last_event": POWERUP_EVENT_STATE["last_event"],
     }, 200
 
 # Endpoint para registrar assinatura EventSub no startup/deploy.
