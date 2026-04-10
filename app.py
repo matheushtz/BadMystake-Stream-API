@@ -14,7 +14,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FILE_PATH = os.path.join(BASE_DIR, "dados.json")
 OGG_DIR = os.path.join(BASE_DIR, "ogg")
 DEFAULT_DATA = {"mortes": 0}
-REWARD_ID_GOLEIRO = "69a918e0-6ed7-461a-b76e-e8f4324cb66a"
 
 APP_BOOT_TIME = int(os.times().elapsed)
 
@@ -110,15 +109,6 @@ def should_process_reward(reward):
     # Processa todos os resgates sem filtro por variavel de ambiente.
     return True
 
-def get_sound_file_for_reward(reward_id):
-    """Retorna o arquivo de som (sound_file) baseado no reward_id."""
-    normalized_reward_id = str(reward_id or "").strip().lower()
-
-    # Validação: reward_id específico deve tocar nossa.ogg
-    if normalized_reward_id == REWARD_ID_GOLEIRO.lower():
-        return "nossa.ogg"
-    return None
-
 def verify_twitch_signature(raw_body):
     message_id = request.headers.get("Twitch-Eventsub-Message-Id", "")
     message_timestamp = request.headers.get("Twitch-Eventsub-Message-Timestamp", "")
@@ -139,12 +129,6 @@ def verify_twitch_signature(raw_body):
 def mark_powerup_trigger(event_payload):
     POWERUP_EVENT_STATE["seq"] += 1
     POWERUP_EVENT_STATE["last_reward"] = event_payload.get("reward", {}).get("title")
-
-    # Aplica som mapeado por reward_id quando houver correspondencia.
-    reward_id = str(event_payload.get("reward", {}).get("id", "")).strip()
-    mapped_sound_file = get_sound_file_for_reward(reward_id)
-    if mapped_sound_file:
-        event_payload["sound_file"] = mapped_sound_file
     
     POWERUP_EVENT_STATE["last_event"] = event_payload
 
@@ -246,7 +230,6 @@ def create_twitch_eventsub_subscription(base_url):
         "version": "1",
         "condition": {
             "broadcaster_user_id": channel_id,
-            "reward_id": REWARD_ID_GOLEIRO,
         },
         "transport": {
             "method": "webhook",
