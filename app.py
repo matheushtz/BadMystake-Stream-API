@@ -537,7 +537,6 @@ def increment():
 @app.route("/death/decrement", methods=["GET", "POST"])
 def decrement():
     new_total = decrement_deaths_in_file()
-    trigger_death_decrement_event(new_total)
     return str(new_total)
 
 # Endpoint raiz para verificar se a API está respondendo
