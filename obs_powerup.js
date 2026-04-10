@@ -124,7 +124,7 @@ async function lista() {
             var pedido = listaPedidos.shift();
             var reward = pedido.reward || {};
             var userName = pedido.user_name || pedido.user_login || "Power-up";
-            var title = reward.title || "Goleiro";
+            //var title = reward.title || "Goleiro";
             var userInput = String(pedido.user_input || "").trim();
             var imageUrl = parseImageUrl(reward);
             var backgroundColor = reward.background_color || "#9146FF";

@@ -14,7 +14,6 @@ OGG_DIR = os.path.join(BASE_DIR, "ogg")
 DEFAULT_DATA = {"mortes": 0}
 
 APP_BOOT_TIME = int(os.times().elapsed)
-GOLEIRO_REWARD_TITLE = "goleiro"
 
 # Estado em memória para notificar a webpage do OBS quando houver resgate.
 POWERUP_EVENT_STATE = {
@@ -423,11 +422,11 @@ def twitch_eventsub_webhook():
         reward = event.get("reward", {}) if isinstance(event.get("reward", {}), dict) else {}
         reward_title = str(reward.get("title", "")).strip()
 
-        if reward_title.lower() == GOLEIRO_REWARD_TITLE:
-            mark_powerup_trigger(event)
-            print(f"[TWITCH] Power-up recebido: {reward_title}")
+        mark_powerup_trigger(event)
+        if reward_title:
+            print(f"[TWITCH] Resgate recebido: {reward_title}")
         else:
-            print(f"[TWITCH] Resgate ignorado: {reward_title}")
+            print("[TWITCH] Resgate recebido")
 
         return {"status": "ok"}, 200
 
