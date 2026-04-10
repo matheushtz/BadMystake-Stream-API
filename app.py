@@ -52,12 +52,12 @@ def get_env_status():
         "GITHUB_BRANCH": env_present("GITHUB_BRANCH"),
         "GITHUB_FILE_PATH": env_present("GITHUB_FILE_PATH"),
         "TWITCH_CHANNEL_ID": env_present("TWITCH_CHANNEL_ID"),
-        "TWITCH_CLIENT_ID": env_present("TWITCH_CLIENT_ID"),
-        "TWITCH_CLIENT_SECRET": env_present("TWITCH_CLIENT_SECRET"),
-        "TWITCH_WEBHOOK_SECRET": env_present("TWITCH_WEBHOOK_SECRET"),
         "TWITCH_DEV_ID": env_present("TWITCH_DEV_ID"),
         "TWITCH_SECRET": env_present("TWITCH_SECRET"),
         "TWITCH_TOKEN": env_present("TWITCH_TOKEN"),
+        "TWITCH_WEBHOOK_SECRET": env_present("TWITCH_WEBHOOK_SECRET"),
+        "TWITCH_CLIENT_ID": env_present("TWITCH_CLIENT_ID"),
+        "TWITCH_CLIENT_SECRET": env_present("TWITCH_CLIENT_SECRET"),
         "TWITCH_TARGET_REWARD_ID": env_present("TWITCH_TARGET_REWARD_ID"),
         "TWITCH_TARGET_REWARD_TITLE": env_present("TWITCH_TARGET_REWARD_TITLE"),
         "PORT": env_present("PORT"),
@@ -75,13 +75,16 @@ def get_first_env(*names):
 
 def twitch_webhook_secret():
     # Segredo do webhook EventSub (assinatura HMAC).
-    return get_first_env("TWITCH_WEBHOOK_SECRET", "TWITCH_SECRET")
+    return get_first_env("TWITCH_WEBHOOK_SECRET")
 
 def twitch_client_id():
-    return get_first_env("TWITCH_CLIENT_ID", "TWITCH_DEV_ID")
+    return get_first_env("TWITCH_DEV_ID")
 
 def twitch_client_secret():
-    return get_first_env("TWITCH_CLIENT_SECRET", "TWITCH_TOKEN")
+    return get_first_env("TWITCH_SECRET")
+
+def twitch_access_token():
+    return get_first_env("TWITCH_TOKEN")
 
 def is_valid_twitch_timestamp(timestamp_raw):
     if not timestamp_raw:
@@ -194,27 +197,35 @@ def get_twitch_app_access_token(client_id, client_secret):
 def create_twitch_eventsub_subscription(base_url):
     client_id = twitch_client_id()
     client_secret = twitch_client_secret()
+    access_token = twitch_access_token()
     channel_id = (os.environ.get("TWITCH_CHANNEL_ID", "") or "").strip()
     webhook_secret = twitch_webhook_secret()
 
-    if not client_id or not client_secret or not channel_id or not webhook_secret:
+    if not client_id or not channel_id or not webhook_secret:
         return {
             "ok": False,
-            "error": "Configure TWITCH_CHANNEL_ID, TWITCH_CLIENT_ID (ou TWITCH_DEV_ID), TWITCH_CLIENT_SECRET (ou TWITCH_TOKEN) e TWITCH_WEBHOOK_SECRET (ou TWITCH_SECRET)",
+            "error": "Configure TWITCH_CHANNEL_ID, TWITCH_DEV_ID, TWITCH_SECRET e TWITCH_WEBHOOK_SECRET",
         }
 
-    try:
-        token = get_twitch_app_access_token(client_id, client_secret)
-    except error.HTTPError as http_err:
-        try:
-            body_text = http_err.read().decode("utf-8")
-        except Exception:
-            body_text = "<sem corpo>"
-        return {"ok": False, "error": f"Token app HTTP {http_err.code} - {body_text}"}
-    except Exception as exc:
-        return {"ok": False, "error": f"Falha ao gerar token app: {exc}"}
+    if not access_token:
+        if not client_secret:
+            return {
+                "ok": False,
+                "error": "Configure TWITCH_SECRET para gerar o token de acesso da Twitch",
+            }
 
-    if not token:
+        try:
+            access_token = get_twitch_app_access_token(client_id, client_secret)
+        except error.HTTPError as http_err:
+            try:
+                body_text = http_err.read().decode("utf-8")
+            except Exception:
+                body_text = "<sem corpo>"
+            return {"ok": False, "error": f"Token app HTTP {http_err.code} - {body_text}"}
+        except Exception as exc:
+            return {"ok": False, "error": f"Falha ao gerar token app: {exc}"}
+
+    if not access_token:
         return {"ok": False, "error": "Nao foi possivel obter app access token"}
 
     callback_url = f"{base_url}/twitch/eventsub"
@@ -237,7 +248,7 @@ def create_twitch_eventsub_subscription(base_url):
         headers={
             "Content-Type": "application/json",
             "Client-Id": client_id,
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {access_token}",
         },
         method="POST",
     )
