@@ -71,6 +71,14 @@ def mark_powerup_trigger(event_payload):
     POWERUP_EVENT_STATE["last_reward"] = event_payload.get("reward", {}).get("title")
     POWERUP_EVENT_STATE["last_event"] = event_payload
 
+def trigger_powerup_test(label="TESTE"):
+    mark_powerup_trigger({
+        "reward": {
+            "title": label,
+        },
+        "source": "manual-test",
+    })
+
 def create_twitch_eventsub_subscription(base_url):
     token = (os.environ.get("TWITCH_TOKEN", "") or "").strip()
     client_id = (os.environ.get("TWITCH_DEV_ID", "") or "").strip()
@@ -443,6 +451,18 @@ def twitch_powerup_state():
         "seq": POWERUP_EVENT_STATE["seq"],
         "last_reward": POWERUP_EVENT_STATE["last_reward"],
         "last_event": POWERUP_EVENT_STATE["last_event"],
+    }, 200
+
+# Endpoint de teste manual para validar o listener sem depender da Twitch.
+@app.route("/twitch/powerup/test", methods=["GET", "POST"])
+def twitch_powerup_test():
+    label = request.args.get("label") or request.form.get("label") or "TESTE"
+    trigger_powerup_test(label)
+    return {
+        "status": "ok",
+        "message": "powerup test triggered",
+        "label": label,
+        "seq": POWERUP_EVENT_STATE["seq"],
     }, 200
 
 # Endpoint para registrar assinatura EventSub no startup/deploy.

@@ -59,8 +59,7 @@ async function pollState() {
         }
 
         if (seq > lastSeq) {
-            var rewardTitle = eventData && eventData.reward && eventData.reward.title ? String(eventData.reward.title) : "resgate";
-            showDebugMessage("Listener recebeu: " + rewardTitle);
+            showDebugMessage("Listener recebeu um evento");
             await tryPlayAudio();
         }
 
