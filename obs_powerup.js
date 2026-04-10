@@ -1,7 +1,7 @@
 var nossa = new Audio("/ogg/nossa.ogg");
 var morreu = new Audio("/ogg/morreu.ogg");
 var plol = new Audio("/ogg/plol.ogg");
-var activeAudio = nossa;
+var activeAudio = null;
 
 nossa.volume = 1;
 nossa.preload = "auto";
@@ -23,6 +23,8 @@ var REWARD_AUDIO_MAP = {
     "death-increment": "/ogg/morreu.ogg",
     "death-decrement": "/ogg/morreu.ogg",
     "manual-test": "/ogg/nossa.ogg",
+    "goleiro": "/ogg/nossa.ogg",
+    "plol": "/ogg/plol.ogg",
     "69a918e0-6ed7-461a-b76e-e8f4324cb66a": "/ogg/nossa.ogg",
     "60863459-5e25-42d2-a49d-7a79fd13bf78": "/ogg/plol.ogg"
 };
@@ -44,30 +46,70 @@ function registerRewardAudio(rewardId, audioPath) {
 registerRewardAudio(REWARD_ID_PLOL, "/ogg/plol.ogg");
 registerRewardAudio(REWARD_ID_GOLEIRO, "/ogg/nossa.ogg");
 
+function getRewardLookupKeys(pedido) {
+    var keys = [];
+
+    if (!pedido || typeof pedido !== "object") {
+        return keys;
+    }
+
+    if (pedido.reward && typeof pedido.reward === "object") {
+        if (pedido.reward.id) {
+            keys.push(normalizeId(pedido.reward.id));
+        }
+        if (pedido.reward.title) {
+            keys.push(normalizeId(pedido.reward.title));
+        }
+    }
+
+    if (pedido.source) {
+        keys.push(normalizeId(pedido.source));
+    }
+
+    return keys;
+}
+
 function buildSoundPath(pedido) {
     if (!pedido || typeof pedido !== "object") {
         console.log("[DEBUG] buildSoundPath - pedido inválido, ignorando");
         return null;
     }
 
-    if (!pedido.reward || typeof pedido.reward !== "object" || !pedido.reward.id) {
-        console.log("[DEBUG] buildSoundPath - reward.id ausente, ignorando");
-        return null;
+    var lookupKeys = getRewardLookupKeys(pedido);
+    console.log("[DEBUG] buildSoundPath - lookupKeys:", lookupKeys);
+
+    for (var i = 0; i < lookupKeys.length; i++) {
+        var audioPath = REWARD_AUDIO_MAP[lookupKeys[i]];
+        if (audioPath) {
+            console.log("[DEBUG] -> retorna áudio configurado:", audioPath, "(key:", lookupKeys[i] + ")");
+            return audioPath;
+        }
     }
 
-    var rewardId = normalizeId(pedido.reward.id);
-
-    console.log("[DEBUG] buildSoundPath - rewardId:", rewardId);
-
-    var audioPath = REWARD_AUDIO_MAP[rewardId];
-
-    if (audioPath) {
-        console.log("[DEBUG] -> retorna áudio configurado:", audioPath);
-        return audioPath;
+    if (pedido.sound_file) {
+        var fileName = String(pedido.sound_file).split("/").pop();
+        if (fileName) {
+            var fallbackPath = "/ogg/" + fileName;
+            console.log("[DEBUG] -> fallback por sound_file:", fallbackPath);
+            return fallbackPath;
+        }
     }
 
     console.log("[DEBUG] buildSoundPath - reward desconhecida, ignorando");
     return null;
+}
+
+function chooseAudioByPath(path) {
+    var normalizedPath = normalizeId(path).split("?")[0];
+
+    if (normalizedPath.indexOf("/ogg/morreu.ogg") !== -1) {
+        return morreu;
+    }
+    if (normalizedPath.indexOf("/ogg/plol.ogg") !== -1) {
+        return plol;
+    }
+
+    return nossa;
 }
 
 function sleepTime(timeMs) {
@@ -100,11 +142,10 @@ async function tryPlayAudio() {
 }
 
 function setAudioSource(path) {
-    var isMorreu = path.indexOf("/ogg/morreu.ogg") !== -1;
-    var isPlol = path.indexOf("/ogg/plol.ogg") !== -1;
-    activeAudio = isMorreu ? morreu : (isPlol ? plol : nossa);
+    activeAudio = chooseAudioByPath(path);
+    var audioName = activeAudio === morreu ? "morreu" : (activeAudio === plol ? "plol" : "nossa");
 
-    console.log("[DEBUG] setAudioSource - path:", path, "-> usando:", isMorreu ? "morreu" : (isPlol ? "plol" : "nossa"));
+    console.log("[DEBUG] setAudioSource - path:", path, "-> usando:", audioName);
 
     if (activeAudio.src.indexOf(path) !== -1) {
         console.log("[DEBUG] Audio já carregado, retornando");
