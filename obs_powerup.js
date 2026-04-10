@@ -10,11 +10,30 @@ var lastSeq = null;
 var cdPadrao = 10;
 var cdUser = {};
 
+
+var REWARD_ID_GOLEIRO = "69a918e0-6ed7-461a-b76e-e8f4324cb66a";
+
+function normalizeId(value) {
+    return String(value || "").trim().toLowerCase();
+}
+
 function buildSoundPath(pedido) {
+    var source = normalizeId(pedido && pedido.source);
+    var rewardId = normalizeId(pedido && pedido.reward && pedido.reward.id);
     var fileName = pedido && pedido.sound_file ? String(pedido.sound_file).trim() : "";
+
+    if (source === "death-increment") {
+        return "/ogg/morreu.ogg";
+    }
+
+    if (rewardId === normalizeId(REWARD_ID_GOLEIRO)) {
+        return "/ogg/nossa.ogg";
+    }
+
     if (!fileName) {
         return "/ogg/nossa.ogg";
     }
+
     return "/ogg/" + fileName;
 }
 
