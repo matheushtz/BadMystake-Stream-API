@@ -1,5 +1,7 @@
-from flask import Flask, request
+from flask import Flask, request, Response, send_from_directory
 import base64
+import hashlib
+import hmac
 import json
 import os
 from urllib import error, parse, request as urllib_request
@@ -11,6 +13,13 @@ FILE_PATH = os.path.join(BASE_DIR, "dados.json")
 DEFAULT_DATA = {"mortes": 0}
 
 APP_BOOT_TIME = int(os.times().elapsed)
+GOLEIRO_REWARD_TITLE = "goleiro"
+
+# Estado em memória para notificar a webpage do OBS quando houver resgate.
+POWERUP_EVENT_STATE = {
+    "seq": 0,
+    "last_reward": None,
+}
 
 # Função para verificar se uma variável de ambiente está presente e não vazia
 def env_present(name):
@@ -26,8 +35,86 @@ def get_env_status():
         "GITHUB_REPOSITORY": env_present("GITHUB_REPOSITORY"),
         "GITHUB_BRANCH": env_present("GITHUB_BRANCH"),
         "GITHUB_FILE_PATH": env_present("GITHUB_FILE_PATH"),
+        "TWITCH_CHANNEL_ID": env_present("TWITCH_CHANNEL_ID"),
+        "TWITCH_DEV_ID": env_present("TWITCH_DEV_ID"),
+        "TWITCH_SECRET": env_present("TWITCH_SECRET"),
+        "TWITCH_TOKEN": env_present("TWITCH_TOKEN"),
         "PORT": env_present("PORT"),
     }
+
+def get_public_base_url():
+    return (os.environ.get("PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+
+def twitch_webhook_secret():
+    return (os.environ.get("TWITCH_SECRET", "") or "").strip()
+
+def verify_twitch_signature(raw_body):
+    message_id = request.headers.get("Twitch-Eventsub-Message-Id", "")
+    message_timestamp = request.headers.get("Twitch-Eventsub-Message-Timestamp", "")
+    provided_signature = request.headers.get("Twitch-Eventsub-Message-Signature", "")
+    secret = twitch_webhook_secret()
+
+    if not message_id or not message_timestamp or not provided_signature or not secret:
+        return False
+
+    payload = f"{message_id}{message_timestamp}".encode("utf-8") + raw_body
+    expected_signature = "sha256=" + hmac.new(
+        secret.encode("utf-8"),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected_signature, provided_signature)
+
+def mark_powerup_trigger(reward_title):
+    POWERUP_EVENT_STATE["seq"] += 1
+    POWERUP_EVENT_STATE["last_reward"] = reward_title
+
+def create_twitch_eventsub_subscription(base_url):
+    token = (os.environ.get("TWITCH_TOKEN", "") or "").strip()
+    client_id = (os.environ.get("TWITCH_DEV_ID", "") or "").strip()
+    channel_id = (os.environ.get("TWITCH_CHANNEL_ID", "") or "").strip()
+    secret = twitch_webhook_secret()
+
+    if not token or not client_id or not channel_id or not secret:
+        return {"ok": False, "error": "Configure TWITCH_CHANNEL_ID, TWITCH_DEV_ID, TWITCH_SECRET e TWITCH_TOKEN"}
+
+    callback_url = f"{base_url}/twitch/eventsub"
+    body = {
+        "type": "channel.channel_points_custom_reward_redemption.add",
+        "version": "1",
+        "condition": {
+            "broadcaster_user_id": channel_id,
+        },
+        "transport": {
+            "method": "webhook",
+            "callback": callback_url,
+            "secret": secret,
+        },
+    }
+
+    req = urllib_request.Request(
+        "https://api.twitch.tv/helix/eventsub/subscriptions",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Client-Id": client_id,
+            "Authorization": f"Bearer {token}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib_request.urlopen(req, timeout=15) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+            return {"ok": True, "response": response_payload}
+    except error.HTTPError as http_err:
+        try:
+            body_text = http_err.read().decode("utf-8")
+        except Exception:
+            body_text = "<sem corpo>"
+        return {"ok": False, "error": f"HTTP {http_err.code} - {body_text}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 # Função para logar o status das variáveis de ambiente relevantes para a publicação no GitHub
 def log_env_status():
@@ -312,6 +399,69 @@ def debug_env():
         "status": "ok",
         "env": get_env_status(),
     }, 200
+
+# Endpoint para callback do EventSub da Twitch.
+@app.route("/twitch/eventsub", methods=["POST"])
+def twitch_eventsub_webhook():
+    raw_body = request.get_data() or b""
+    message_type = (request.headers.get("Twitch-Eventsub-Message-Type", "") or "").strip().lower()
+
+    if message_type == "webhook_callback_verification":
+        payload = request.get_json(silent=True) or {}
+        challenge = payload.get("challenge", "")
+        return Response(challenge, status=200, mimetype="text/plain")
+
+    if not verify_twitch_signature(raw_body):
+        return {"error": "Assinatura Twitch invalida"}, 403
+
+    if message_type == "notification":
+        payload = request.get_json(silent=True) or {}
+        event = payload.get("event", {}) if isinstance(payload.get("event", {}), dict) else {}
+        reward = event.get("reward", {}) if isinstance(event.get("reward", {}), dict) else {}
+        reward_title = str(reward.get("title", "")).strip()
+
+        if reward_title.lower() == GOLEIRO_REWARD_TITLE:
+            mark_powerup_trigger(reward_title)
+            print(f"[TWITCH] Power-up recebido: {reward_title}")
+        else:
+            print(f"[TWITCH] Resgate ignorado: {reward_title}")
+
+        return {"status": "ok"}, 200
+
+    if message_type == "revocation":
+        print("[TWITCH] EventSub revogado")
+        return {"status": "revoked"}, 200
+
+    return {"status": "ignored", "message_type": message_type}, 200
+
+# Endpoint para consultar trigger consumível pela webpage do OBS.
+@app.route("/twitch/powerup/state", methods=["GET"])
+def twitch_powerup_state():
+    return {
+        "seq": POWERUP_EVENT_STATE["seq"],
+        "last_reward": POWERUP_EVENT_STATE["last_reward"],
+    }, 200
+
+# Endpoint para registrar assinatura EventSub no startup/deploy.
+@app.route("/twitch/eventsub/subscribe", methods=["POST", "GET"])
+def twitch_eventsub_subscribe():
+    base_url = get_public_base_url()
+    if not base_url:
+        return {"ok": False, "error": "Defina PUBLIC_BASE_URL no Render (ex: https://sua-api.onrender.com)"}, 400
+
+    result = create_twitch_eventsub_subscription(base_url)
+    status_code = 200 if result.get("ok") else 400
+    return result, status_code
+
+# Webpage para OBS: fica escutando estado de power-up e toca o audio quando houver novo trigger.
+@app.route("/obs/powerup", methods=["GET"])
+def obs_powerup_page():
+    return send_from_directory(BASE_DIR, "obs_powerup.html")
+
+# Arquivo de audio para a webpage do OBS.
+@app.route("/obs/nossa.mp3", methods=["GET"])
+def obs_powerup_audio():
+    return send_from_directory(BASE_DIR, "nossa.mp3")
 
 if __name__ == "__main__":
     log_env_status()

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OBS Power-up Listener</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <audio id="powerupAudio" preload="auto" src="/ogg/nossa.ogg"></audio>
+
+  <script>
+    (function () {
+      const POLL_INTERVAL_MS = 1200;
+      const stateUrl = "/twitch/powerup/state";
+      const audio = document.getElementById("powerupAudio");
+
+      let lastSeq = null;
+
+      async function pollState() {
+        try {
+          const response = await fetch(stateUrl, { cache: "no-store" });
+          if (!response.ok) {
+            return;
+          }
+
+          const data = await response.json();
+          const seq = Number(data.seq || 0);
+
+          if (lastSeq === null) {
+            lastSeq = seq;
+            return;
+          }
+
+          if (seq > lastSeq) {
+            lastSeq = seq;
+            audio.currentTime = 0;
+            await audio.play();
+            return;
+          }
+
+          lastSeq = seq;
+        } catch (error) {
+          // Mantem polling silencioso para uso em browser source do OBS.
+        }
+      }
+
+      setInterval(pollState, POLL_INTERVAL_MS);
+      pollState();
+    })();
+  </script>
+</body>
+</html>
