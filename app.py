@@ -14,6 +14,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FILE_PATH = os.path.join(BASE_DIR, "dados.json")
 OGG_DIR = os.path.join(BASE_DIR, "ogg")
 DEFAULT_DATA = {"mortes": 0}
+REWARD_ID_GOLEIRO = "69a918e0-6ed7-461a-b76e-e8f4324cb66a"
 
 APP_BOOT_TIME = int(os.times().elapsed)
 
@@ -111,8 +112,10 @@ def should_process_reward(reward):
 
 def get_sound_file_for_reward(reward_id):
     """Retorna o arquivo de som (sound_file) baseado no reward_id."""
+    normalized_reward_id = str(reward_id or "").strip().lower()
+
     # Validação: reward_id específico deve tocar nossa.ogg
-    if reward_id == "69a918e0-6ed7-461a-b76e-e8f4324cb66a":
+    if normalized_reward_id == "69a918e0-6ed7-461a-b76e-e8f4324cb66a":
         return "nossa.ogg"
     return None
 
@@ -136,13 +139,12 @@ def verify_twitch_signature(raw_body):
 def mark_powerup_trigger(event_payload):
     POWERUP_EVENT_STATE["seq"] += 1
     POWERUP_EVENT_STATE["last_reward"] = event_payload.get("reward", {}).get("title")
-    
-    # Se o evento não tiver sound_file, tenta determinar baseado no reward_id
-    if "sound_file" not in event_payload:
-        reward_id = str(event_payload.get("reward", {}).get("id", "")).strip()
-        sound_file = get_sound_file_for_reward(reward_id)
-        if sound_file:
-            event_payload["sound_file"] = sound_file
+
+    # Aplica som mapeado por reward_id quando houver correspondencia.
+    reward_id = str(event_payload.get("reward", {}).get("id", "")).strip()
+    mapped_sound_file = get_sound_file_for_reward(reward_id)
+    if mapped_sound_file:
+        event_payload["sound_file"] = mapped_sound_file
     
     POWERUP_EVENT_STATE["last_event"] = event_payload
 
@@ -231,6 +233,7 @@ def create_twitch_eventsub_subscription(base_url):
         "version": "1",
         "condition": {
             "broadcaster_user_id": channel_id,
+            "reward_id": REWARD_ID_GOLEIRO,
         },
         "transport": {
             "method": "webhook",
@@ -552,9 +555,15 @@ def debug_env():
 @app.route("/twitch/eventsub", methods=["POST"])
 def twitch_eventsub_webhook():
     raw_body = request.get_data() or b""
+    payload = request.get_json(silent=True) or {}
     message_id = (request.headers.get("Twitch-Eventsub-Message-Id", "") or "").strip()
     message_timestamp = (request.headers.get("Twitch-Eventsub-Message-Timestamp", "") or "").strip()
     message_type = (request.headers.get("Twitch-Eventsub-Message-Type", "") or "").strip().lower()
+
+    # Responde o challenge imediatamente para nao bloquear a verificacao inicial do webhook.
+    if message_type == "webhook_callback_verification":
+        challenge = payload.get("challenge", "")
+        return Response(challenge, status=200, mimetype="text/plain")
 
     if not is_valid_twitch_timestamp(message_timestamp):
         print(f"[TWITCH] Timestamp invalido: {message_timestamp}", flush=True)
@@ -572,13 +581,7 @@ def twitch_eventsub_webhook():
         LAST_EVENT_IDS.clear()
         LAST_EVENT_IDS.add(message_id)
 
-    if message_type == "webhook_callback_verification":
-        payload = request.get_json(silent=True) or {}
-        challenge = payload.get("challenge", "")
-        return Response(challenge, status=200, mimetype="text/plain")
-
     if message_type == "notification":
-        payload = request.get_json(silent=True) or {}
         event = payload.get("event", {}) if isinstance(payload.get("event", {}), dict) else {}
         reward = event.get("reward", {}) if isinstance(event.get("reward", {}), dict) else {}
         reward_title = str(reward.get("title", "")).strip()
