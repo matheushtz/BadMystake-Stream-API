@@ -84,7 +84,13 @@ def twitch_client_secret():
     return get_first_env("TWITCH_SECRET")
 
 def twitch_access_token():
-    return get_first_env("TWITCH_TOKEN")
+    client_id = twitch_client_id()
+    client_secret = twitch_client_secret()
+
+    if not client_id or not client_secret:
+        return ""
+
+    return get_twitch_app_access_token(client_id, client_secret)
 
 def is_valid_twitch_timestamp(timestamp_raw):
     if not timestamp_raw:
@@ -197,7 +203,6 @@ def get_twitch_app_access_token(client_id, client_secret):
 def create_twitch_eventsub_subscription(base_url):
     client_id = twitch_client_id()
     client_secret = twitch_client_secret()
-    access_token = twitch_access_token()
     channel_id = (os.environ.get("TWITCH_CHANNEL_ID", "") or "").strip()
     webhook_secret = twitch_webhook_secret()
 
@@ -207,26 +212,22 @@ def create_twitch_eventsub_subscription(base_url):
             "error": "Configure TWITCH_CHANNEL_ID, TWITCH_DEV_ID, TWITCH_SECRET e TWITCH_WEBHOOK_SECRET",
         }
 
-    if not access_token:
-        if not client_secret:
-            return {
-                "ok": False,
-                "error": "Configure TWITCH_SECRET para gerar o token de acesso da Twitch",
-            }
-
+    try:
+        access_token = twitch_access_token()
+    except error.HTTPError as http_err:
         try:
-            access_token = get_twitch_app_access_token(client_id, client_secret)
-        except error.HTTPError as http_err:
-            try:
-                body_text = http_err.read().decode("utf-8")
-            except Exception:
-                body_text = "<sem corpo>"
-            return {"ok": False, "error": f"Token app HTTP {http_err.code} - {body_text}"}
-        except Exception as exc:
-            return {"ok": False, "error": f"Falha ao gerar token app: {exc}"}
+            body_text = http_err.read().decode("utf-8")
+        except Exception:
+            body_text = "<sem corpo>"
+        return {"ok": False, "error": f"Token app HTTP {http_err.code} - {body_text}"}
+    except Exception as exc:
+        return {"ok": False, "error": f"Falha ao gerar token app: {exc}"}
 
     if not access_token:
-        return {"ok": False, "error": "Nao foi possivel obter app access token"}
+        return {
+            "ok": False,
+            "error": "Nao foi possivel obter app access token (verifique TWITCH_DEV_ID e TWITCH_SECRET)",
+        }
 
     callback_url = f"{base_url}/twitch/eventsub"
     body = {
