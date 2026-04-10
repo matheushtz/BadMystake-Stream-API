@@ -67,6 +67,7 @@ function loadImage(elen, img) {
         elen.src = img;
     });
 }
+ 
 
 function sleepTime(timeMs) {
     return new Promise(function (resolve) {
