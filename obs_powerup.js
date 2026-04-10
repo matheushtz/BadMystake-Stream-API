@@ -19,34 +19,54 @@ var lastSeq = null;
 
 var REWARD_ID_PLOL = "60863459-5e25-42d2-a49d-7a79fd13bf78";
 var REWARD_ID_GOLEIRO = "69a918e0-6ed7-461a-b76e-e8f4324cb66a";
+var REWARD_AUDIO_MAP = {
+    "death-increment": "/ogg/morreu.ogg",
+    "69a918e0-6ed7-461a-b76e-e8f4324cb66a": "/ogg/nossa.ogg",
+    "60863459-5e25-42d2-a49d-7a79fd13bf78": "/ogg/plol.ogg"
+};
 
 function normalizeId(value) {
     return String(value || "").trim().toLowerCase();
 }
 
+function registerRewardAudio(rewardId, audioPath) {
+    var normalizedRewardId = normalizeId(rewardId);
+
+    if (!normalizedRewardId || !audioPath) {
+        return;
+    }
+
+    REWARD_AUDIO_MAP[normalizedRewardId] = audioPath;
+}
+
+registerRewardAudio(REWARD_ID_PLOL, "/ogg/plol.ogg");
+registerRewardAudio(REWARD_ID_GOLEIRO, "/ogg/nossa.ogg");
+
 function buildSoundPath(pedido) {
-    var source = normalizeId(pedido && pedido.source);
-    var rewardId = normalizeId(pedido && pedido.reward && pedido.reward.id);
+    if (!pedido || typeof pedido !== "object") {
+        console.log("[DEBUG] buildSoundPath - pedido inválido, ignorando");
+        return null;
+    }
+
+    if (!pedido.reward || typeof pedido.reward !== "object" || !pedido.reward.id) {
+        console.log("[DEBUG] buildSoundPath - reward.id ausente, ignorando");
+        return null;
+    }
+
+    var source = normalizeId(pedido.source);
+    var rewardId = normalizeId(pedido.reward.id);
 
     console.log("[DEBUG] buildSoundPath - source:", source, "rewardId:", rewardId);
 
-    if (source === "death-increment" || rewardId === "death-increment") {
-        console.log("[DEBUG] -> retorna morreu.ogg");
-        return "/ogg/morreu.ogg";
+    var audioPath = REWARD_AUDIO_MAP[source] || REWARD_AUDIO_MAP[rewardId];
+
+    if (audioPath) {
+        console.log("[DEBUG] -> retorna áudio configurado:", audioPath);
+        return audioPath;
     }
 
-    if (rewardId === normalizeId(REWARD_ID_GOLEIRO)) {
-        console.log("[DEBUG] -> retorna nossa.ogg (goleiro)");
-        return "/ogg/nossa.ogg";
-    }
-
-    if (rewardId === normalizeId(REWARD_ID_PLOL)) {
-        console.log("[DEBUG] -> retorna plol.ogg (p lol)");
-        return "/ogg/plol.ogg";
-    }
-
-    console.log("[DEBUG] -> retorna nossa.ogg (fallback)");
-    return "/ogg/nossa.ogg";
+    console.log("[DEBUG] buildSoundPath - reward desconhecida, ignorando");
+    return null;
 }
 
 function sleepTime(timeMs) {
@@ -59,7 +79,7 @@ function sleepTime(timeMs) {
 
 async function tryPlayAudio() {
     try {
-        console.log("[DEBUG] tryPlayAudio - tocando:", activeAudio === nossa ? "nossa" : "morreu");
+        console.log("[DEBUG] tryPlayAudio - tocando:", activeAudio === morreu ? "morreu" : (activeAudio === plol ? "plol" : "nossa"));
         activeAudio.currentTime = 0;
         await activeAudio.play();
         return true;
@@ -128,8 +148,13 @@ async function lista() {
     while (true) {
         if (listaPedidos.length > 0) {
             var pedido = listaPedidos.shift();
+            var soundPath = buildSoundPath(pedido);
 
-            setAudioSource(buildSoundPath(pedido));
+            if (!soundPath) {
+                continue;
+            }
+
+            setAudioSource(soundPath);
             await tryPlayAudio();
 
             if (activeAudio.duration && !isNaN(activeAudio.duration) && activeAudio.duration > 0) {
