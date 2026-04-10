@@ -66,18 +66,22 @@ def get_env_status():
 def get_public_base_url():
     return (os.environ.get("PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
 
+def get_first_env(*names):
+    for name in names:
+        value = (os.environ.get(name, "") or "").strip()
+        if value:
+            return value
+    return ""
+
 def twitch_webhook_secret():
     # Segredo do webhook EventSub (assinatura HMAC).
-    return (os.environ.get("TWITCH_WEBHOOK_SECRET", "") or "").strip()
+    return get_first_env("TWITCH_WEBHOOK_SECRET", "TWITCH_SECRET")
 
 def twitch_client_id():
-    return (
-        (os.environ.get("TWITCH_CLIENT_ID", "") or "").strip()
-        or (os.environ.get("TWITCH_DEV_ID", "") or "").strip()
-    )
+    return get_first_env("TWITCH_CLIENT_ID", "TWITCH_DEV_ID")
 
 def twitch_client_secret():
-    return (os.environ.get("TWITCH_CLIENT_SECRET", "") or "").strip()
+    return get_first_env("TWITCH_CLIENT_SECRET", "TWITCH_TOKEN")
 
 def is_valid_twitch_timestamp(timestamp_raw):
     if not timestamp_raw:
@@ -196,7 +200,7 @@ def create_twitch_eventsub_subscription(base_url):
     if not client_id or not client_secret or not channel_id or not webhook_secret:
         return {
             "ok": False,
-            "error": "Configure TWITCH_CHANNEL_ID, TWITCH_CLIENT_ID, TWITCH_CLIENT_SECRET e TWITCH_WEBHOOK_SECRET",
+            "error": "Configure TWITCH_CHANNEL_ID, TWITCH_CLIENT_ID (ou TWITCH_DEV_ID), TWITCH_CLIENT_SECRET (ou TWITCH_TOKEN) e TWITCH_WEBHOOK_SECRET (ou TWITCH_SECRET)",
         }
 
     try:
