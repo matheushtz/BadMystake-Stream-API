@@ -15,6 +15,15 @@ DEFAULT_DATA = {"mortes": 0}
 
 APP_BOOT_TIME = int(os.times().elapsed)
 
+@app.before_request
+def log_incoming_request():
+    query_string = request.query_string.decode("utf-8") if request.query_string else ""
+    query_suffix = f"?{query_string}" if query_string else ""
+    print(
+        f"[HTTP] {request.method} {request.path}{query_suffix} from={request.remote_addr}",
+        flush=True,
+    )
+
 # Estado em memória para notificar a webpage do OBS quando houver resgate.
 POWERUP_EVENT_STATE = {
     "seq": 0,
