@@ -13,6 +13,7 @@ app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FILE_PATH = os.path.join(BASE_DIR, "dados.json")
 OGG_DIR = os.path.join(BASE_DIR, "ogg")
+MP3_DIR = os.path.join(BASE_DIR, "mp3")
 DEFAULT_DATA = {"mortes": 0}
 
 APP_BOOT_TIME = int(os.times().elapsed)
@@ -668,6 +669,10 @@ def obs_powerup_audio_morreu_ogg():
 @app.route("/ogg/plol.ogg", methods=["GET"])
 def obs_powerup_audio_plol_ogg():
     return send_file_no_cache(OGG_DIR, "plol.ogg")
+
+@app.route("/mp3/<path:filename>", methods=["GET"])
+def mp3_assets(filename):
+    return send_file_no_cache(MP3_DIR, filename)
 
 if __name__ == "__main__":
     log_env_status()

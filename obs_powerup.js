@@ -1,7 +1,9 @@
 var nossa = new Audio("/ogg/nossa.ogg");
 var morreu = new Audio("/ogg/morreu.ogg");
 var plol = new Audio("/ogg/plol.ogg");
+var audioCache = {};
 var activeAudio = null;
+var activeAudioPath = null;
 
 nossa.volume = 1;
 nossa.preload = "auto";
@@ -26,7 +28,12 @@ var REWARD_AUDIO_MAP = {
     "goleiro": "/ogg/nossa.ogg",
     "plol": "/ogg/plol.ogg",
     "69a918e0-6ed7-461a-b76e-e8f4324cb66a": "/ogg/nossa.ogg",
-    "60863459-5e25-42d2-a49d-7a79fd13bf78": "/ogg/plol.ogg"
+    "60863459-5e25-42d2-a49d-7a79fd13bf78": "/ogg/plol.ogg",
+    "77cbd32c-ba20-4896-822b-cfedfdb729cb": "/mp3/gamedle.mp3",
+    "831c90b0-038d-4046-82dc-3be905701c66": "/mp3/3h-runescape.mp3",
+    "a7978bbc-1a5e-4c11-a194-d60a70a6e63a": "/mp3/3h-rocket-league.mp3",
+    "b001e303-c1fd-4d7a-a1db-5235eec9ede9": "/mp3/aram-ate-perder.mp3",
+    "c820aa0b-e4dd-4e48-9558-36ec0a51d512": "/mp3/3h-algum-game.mp3"
 };
 
 function normalizeId(value) {
@@ -45,6 +52,37 @@ function registerRewardAudio(rewardId, audioPath) {
 
 registerRewardAudio(REWARD_ID_PLOL, "/ogg/plol.ogg");
 registerRewardAudio(REWARD_ID_GOLEIRO, "/ogg/nossa.ogg");
+
+function getAudioDirectory(path) {
+    var normalizedPath = normalizeId(path).split("?")[0];
+
+    if (normalizedPath.indexOf("/mp3/") === 0 || normalizedPath.slice(-4) === ".mp3") {
+        return "/mp3/";
+    }
+
+    if (normalizedPath.indexOf("/ogg/") === 0 || normalizedPath.slice(-4) === ".ogg") {
+        return "/ogg/";
+    }
+
+    return "/ogg/";
+}
+
+function getAudioByPath(path) {
+    var normalizedPath = normalizeId(path).split("?")[0];
+
+    if (!normalizedPath) {
+        return nossa;
+    }
+
+    if (!audioCache[normalizedPath]) {
+        var audio = new Audio(normalizedPath);
+        audio.volume = 1;
+        audio.preload = "auto";
+        audioCache[normalizedPath] = audio;
+    }
+
+    return audioCache[normalizedPath];
+}
 
 function getRewardLookupKeys(pedido) {
     var keys = [];
@@ -89,7 +127,7 @@ function buildSoundPath(pedido) {
     if (pedido.sound_file) {
         var fileName = String(pedido.sound_file).split("/").pop();
         if (fileName) {
-            var fallbackPath = "/ogg/" + fileName;
+            var fallbackPath = getAudioDirectory(fileName) + fileName;
             console.log("[DEBUG] -> fallback por sound_file:", fallbackPath);
             return fallbackPath;
         }
@@ -100,16 +138,7 @@ function buildSoundPath(pedido) {
 }
 
 function chooseAudioByPath(path) {
-    var normalizedPath = normalizeId(path).split("?")[0];
-
-    if (normalizedPath.indexOf("/ogg/morreu.ogg") !== -1) {
-        return morreu;
-    }
-    if (normalizedPath.indexOf("/ogg/plol.ogg") !== -1) {
-        return plol;
-    }
-
-    return nossa;
+    return getAudioByPath(path);
 }
 
 function sleepTime(timeMs) {
@@ -122,7 +151,8 @@ function sleepTime(timeMs) {
 
 async function tryPlayAudio() {
     try {
-        console.log("[DEBUG] tryPlayAudio - tocando:", activeAudio === morreu ? "morreu" : (activeAudio === plol ? "plol" : "nossa"));
+        var audioLabel = activeAudioPath ? activeAudioPath.split("/").pop() : "audio";
+        console.log("[DEBUG] tryPlayAudio - tocando:", audioLabel);
         activeAudio.currentTime = 0;
         await activeAudio.play();
         return true;
@@ -142,16 +172,19 @@ async function tryPlayAudio() {
 }
 
 function setAudioSource(path) {
-    activeAudio = chooseAudioByPath(path);
-    var audioName = activeAudio === morreu ? "morreu" : (activeAudio === plol ? "plol" : "nossa");
+    var normalizedPath = normalizeId(path).split("?")[0];
 
-    console.log("[DEBUG] setAudioSource - path:", path, "-> usando:", audioName);
-
-    if (activeAudio.src.indexOf(path) !== -1) {
+    if (activeAudioPath === normalizedPath && activeAudio) {
         console.log("[DEBUG] Audio já carregado, retornando");
         return;
     }
-    activeAudio.src = path;
+
+    activeAudio = chooseAudioByPath(normalizedPath);
+    activeAudioPath = normalizedPath;
+    var audioName = activeAudioPath.split("/").pop() || "audio";
+
+    console.log("[DEBUG] setAudioSource - path:", path, "-> usando:", audioName);
+    activeAudio.src = activeAudioPath;
     activeAudio.load();
     console.log("[DEBUG] Audio carregado");
 }

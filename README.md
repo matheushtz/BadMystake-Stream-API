@@ -24,7 +24,7 @@ Objetivo atual:
 
 1. Receber notificacao de resgate via webhook da Twitch.
 2. Detectar quando o reward recebido for `Goleiro`.
-3. Notificar uma webpage no OBS para tocar um audio (`nossa.mp3`).
+3. Notificar uma webpage no OBS para tocar um audio (`nossa.ogg` ou arquivos em `/mp3/`).
 
 Status:
 
@@ -56,10 +56,13 @@ Status:
 - `GET /obs/nossa.mp3`
 	- Audio tocado quando houver novo trigger do reward `Goleiro`
 
+- `GET /mp3/<arquivo>.mp3`
+	- Arquivos novos usados pelos rewards mapeados no overlay
+
 ### Como usar no OBS (estado atual)
 
 1. Adicione uma Browser Source apontando para `https://seu-servico.onrender.com/obs/powerup`.
-2. Garanta que o arquivo `nossa.mp3` exista na raiz do projeto.
+2. Garanta que os arquivos de audio existam nas pastas `ogg/` e `mp3/` conforme o mapeamento do JavaScript.
 3. Dispare a criacao da assinatura em `/twitch/eventsub/subscribe`.
 4. Ao ocorrer um novo resgate `Goleiro`, a pagina deve tocar o audio.
 
