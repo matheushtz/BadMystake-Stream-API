@@ -145,7 +145,8 @@ def trigger_powerup_test(label="TESTE"):
         "reward": {
             "title": label,
         },
-        "source": "manual-test",
+        "source": "powerup-test",
+        "sound_file": "nossa.ogg",
     })
 
 def trigger_death_increment_event(total_value):
