@@ -17,6 +17,13 @@ DEFAULT_DATA = {"mortes": 0}
 
 APP_BOOT_TIME = int(os.times().elapsed)
 
+def send_file_no_cache(directory, filename):
+    response = send_from_directory(directory, filename)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
 @app.before_request
 def log_incoming_request():
     query_string = request.query_string.decode("utf-8") if request.query_string else ""
@@ -632,31 +639,35 @@ def twitch_eventsub_subscribe():
 # Webpage para OBS: fica escutando estado de power-up e toca o audio quando houver novo trigger.
 @app.route("/obs/powerup", methods=["GET"])
 def obs_powerup_page():
-    return send_from_directory(BASE_DIR, "obs_powerup.html")
+    return send_file_no_cache(BASE_DIR, "obs_powerup.html")
 
 @app.route("/obs/powerup.js", methods=["GET"])
 def obs_powerup_script():
-    return send_from_directory(BASE_DIR, "obs_powerup.js")
+    return send_file_no_cache(BASE_DIR, "obs_powerup.js")
 
 @app.route("/obs/powerup.css", methods=["GET"])
 def obs_powerup_styles():
-    return send_from_directory(BASE_DIR, "obs_powerup.css")
+    return send_file_no_cache(BASE_DIR, "obs_powerup.css")
 
 # Arquivo de audio para a webpage do OBS.
 @app.route("/obs/nossa.mp3", methods=["GET"])
 def obs_powerup_audio():
     # Compatibilidade: se nao houver mp3, usa o ogg padrao.
     if os.path.exists(os.path.join(BASE_DIR, "nossa.mp3")):
-        return send_from_directory(BASE_DIR, "nossa.mp3")
-    return send_from_directory(OGG_DIR, "nossa.ogg")
+        return send_file_no_cache(BASE_DIR, "nossa.mp3")
+    return send_file_no_cache(OGG_DIR, "nossa.ogg")
 
 @app.route("/ogg/nossa.ogg", methods=["GET"])
 def obs_powerup_audio_ogg():
-    return send_from_directory(OGG_DIR, "nossa.ogg")
+    return send_file_no_cache(OGG_DIR, "nossa.ogg")
 
 @app.route("/ogg/morreu.ogg", methods=["GET"])
 def obs_powerup_audio_morreu_ogg():
-    return send_from_directory(OGG_DIR, "morreu.ogg")
+    return send_file_no_cache(OGG_DIR, "morreu.ogg")
+
+@app.route("/ogg/plol.ogg", methods=["GET"])
+def obs_powerup_audio_plol_ogg():
+    return send_file_no_cache(OGG_DIR, "plol.ogg")
 
 if __name__ == "__main__":
     log_env_status()
