@@ -59,6 +59,8 @@ def get_env_status():
         "GITHUB_REPOSITORY": env_present("GITHUB_REPOSITORY"),
         "GITHUB_BRANCH": env_present("GITHUB_BRANCH"),
         "GITHUB_FILE_PATH": env_present("GITHUB_FILE_PATH"),
+        "STEAM_WEB_API_KEY": env_present("STEAM_WEB_API_KEY"),
+        "STEAM_TARGET_STEAMID64": env_present("STEAM_TARGET_STEAMID64"),
         "TWITCH_CHANNEL_ID": env_present("TWITCH_CHANNEL_ID"),
         "TWITCH_DEV_ID": env_present("TWITCH_DEV_ID"),
         "TWITCH_SECRET": env_present("TWITCH_SECRET"),
@@ -78,6 +80,91 @@ def get_first_env(*names):
         if value:
             return value
     return ""
+
+STEAM_TARGET_STEAMID64 = "76561198068386184"
+STEAM_GAME_APPIDS = {
+    "Outer Wilds": 753640,
+}
+
+def steam_target_steamid64():
+    return get_first_env("STEAM_TARGET_STEAMID64")
+
+def steam_web_api_key():
+    return get_first_env("STEAM_WEB_API_KEY")
+
+def get_steam_game_entry(game_name):
+    if not game_name:
+        return None, None
+
+    requested_name = normalize_game_name(game_name)
+    for mapped_name, appid in STEAM_GAME_APPIDS.items():
+        if normalize_game_name(mapped_name) == requested_name:
+            return mapped_name, appid
+
+    return None, None
+
+def steam_api_get_json(url, timeout=15):
+    req = urllib_request.Request(
+        url,
+        headers={"User-Agent": "death-counter-api"},
+        method="GET",
+    )
+
+    with urllib_request.urlopen(req, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+def get_steam_player_achievement_count(steamid64, appid, api_key):
+    api_url = (
+        "https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/"
+        f"?key={parse.quote(api_key)}&steamid={steamid64}&appid={appid}"
+    )
+
+    payload = steam_api_get_json(api_url)
+    player_stats = payload.get("playerstats", {})
+    achievements = player_stats.get("achievements", [])
+
+    if not isinstance(achievements, list):
+        return 0
+
+    unlocked = 0
+    for achievement in achievements:
+        if not isinstance(achievement, dict):
+            continue
+
+        raw_value = achievement.get("achieved", 0)
+        try:
+            achieved = int(raw_value)
+        except (TypeError, ValueError):
+            achieved = 1 if str(raw_value).strip().lower() in ["true", "yes"] else 0
+
+        if achieved == 1:
+            unlocked += 1
+
+    return unlocked
+
+def get_steam_total_achievement_count(appid, api_key):
+    api_url = (
+        "https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/"
+        f"?key={parse.quote(api_key)}&appid={appid}"
+    )
+
+    payload = steam_api_get_json(api_url)
+    game = payload.get("game", {})
+    available_stats = game.get("availableGameStats", {}) if isinstance(game, dict) else {}
+    achievements = available_stats.get("achievements", []) if isinstance(available_stats, dict) else []
+
+    if not isinstance(achievements, list):
+        return 0
+
+    return len(achievements)
+
+def format_steam_achievement_summary(game_name, unlocked, total):
+    percentage = 0.0
+    if total > 0:
+        percentage = (unlocked / total) * 100
+
+    percentage_text = f"{percentage:.2f}".replace(".", ",")
+    return f"{game_name}: {unlocked} de {total} ({percentage_text}% concluído)"
 
 def twitch_webhook_secret():
     # Segredo do webhook EventSub (assinatura HMAC).
@@ -690,6 +777,51 @@ def get_current_game():
         "game_key": game_key,
         "mortes": mortes,
     }, 200
+
+
+# Endpoint para retornar conquistas da Steam de um jogo mapeado.
+@app.route("/steam/achievements", methods=["GET"])
+@app.route("/steam/achievements/", methods=["GET"])
+def steam_achievements():
+    game_name = (request.args.get("game") or "Outer Wilds").strip()
+    mapped_name, appid = get_steam_game_entry(game_name)
+
+    if not mapped_name or not appid:
+        return {
+            "error": f"Jogo nao mapeado: {game_name}",
+            "available_games": list(STEAM_GAME_APPIDS.keys()),
+        }, 404
+
+    api_key = steam_web_api_key()
+    steamid64 = steam_target_steamid64()
+    if not api_key:
+        return {
+            "error": "Defina STEAM_WEB_API_KEY no ambiente para consultar as conquistas da Steam",
+        }, 400
+
+    if not steamid64:
+        return {
+            "error": "Defina STEAM_TARGET_STEAMID64 no ambiente para consultar as conquistas da Steam",
+        }, 400
+
+    try:
+        unlocked = get_steam_player_achievement_count(steamid64, appid, api_key)
+        total = get_steam_total_achievement_count(appid, api_key)
+    except error.HTTPError as http_err:
+        try:
+            body = http_err.read().decode("utf-8")
+        except Exception:
+            body = "<sem corpo>"
+        return {
+            "error": f"Steam HTTP {http_err.code} - {body}",
+        }, 502
+    except Exception as exc:
+        return {
+            "error": f"Falha ao consultar Steam: {exc}",
+        }, 500
+
+    summary = format_steam_achievement_summary(mapped_name, unlocked, total)
+    return Response(summary, status=200, mimetype="text/plain; charset=utf-8")
 
 
 # Endpoint para a stream: retorna apenas o nome do jogo atual.

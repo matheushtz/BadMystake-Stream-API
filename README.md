@@ -1,6 +1,6 @@
 # BadMystake Stream API
 
-API em Flask para controlar um contador de mortes para livestream/OBS (em tempo real utilizando comandos de chat Ex: Nightbot !morreu).
+API em Flask para integrar interacao do chat com a stream, com suporte a comandos, eventos da Twitch, feedback sonoro no OBS e consultas de progresso da Steam.
 
 ## Ambiente alvo
 
@@ -11,25 +11,25 @@ Esta aplicacao foi pensada para rodar no host do Render.
 
 ## O que o programa faz
 
-1. Mantem um contador de mortes em `dados.json`.
-2. Incrementa o contador via endpoint HTTP.
-3. Retorna o valor para uso em overlay no OBS.
-4. Expoe rotas de health check para manter o servico online no Render.
+1. Mantem dados por jogo em `dados.json`, usando chave com o nome do jogo.
+2. Recebe comandos do chat via endpoints expostos para integrarem com Nightbot ou automacoes similares.
+3. Recebe eventos da Twitch via listener/webhook e dispara feedback sonoro na stream.
+4. Retorna informacoes de progresso de conquistas da Steam para o jogo atual da live.
+5. Expoe rotas de health check para manter o servico online no Render.
 
-## Feature em desenvolvimento: Twitch Power-ups & Rewards
+## Twitch Power-ups & Rewards
 
-Foi iniciada a integracao com resgates de pontos do canal da Twitch (EventSub), focada no reward `Goleiro`.
+Integracao finalizada com resgate de power-up na Twitch e feedback sonoro na stream.
 
-Objetivo atual:
+Fluxo geral:
 
-1. Receber notificacao de resgate via webhook da Twitch.
-2. Detectar quando o reward recebido for `Goleiro`.
-3. Notificar uma webpage no OBS para tocar um audio (`nossa.ogg` ou arquivos em `/mp3/`).
+1. A Twitch envia o evento para o webhook da API.
+2. O listener processa o payload e atualiza o estado em memoria.
+3. A webpage do OBS consulta esse estado via JavaScript.
+4. O JavaScript reage ao novo evento e toca o audio configurado.
+5. O mesmo padrao permite acionar a API por comandos do chat, por exemplo via Nightbot, usando os endpoints HTTP expostos.
 
-Status:
-
-- Em desenvolvimento.
-- Fluxo basico ja implementado na API e na webpage do OBS.
+Esse fluxo permite unir comandos do chat, eventos da Twitch e resposta visual/sonora na stream sem depender de extensoes pesadas no OBS.
 
 ### Variaveis de ambiente (Render)
 
@@ -37,7 +37,19 @@ Status:
 - `TWITCH_DEV_ID`
 - `TWITCH_SECRET`
 - `TWITCH_TOKEN`
+- `STEAM_WEB_API_KEY`
+- `STEAM_TARGET_STEAMID64`
 - `PUBLIC_BASE_URL` (exemplo: `https://seu-servico.onrender.com`)
+
+### Como funciona a integracao com o chat
+
+O fluxo foi desenhado para ser simples de operar na live:
+
+1. O chat dispara um comando do Nightbot.
+2. O Nightbot chama um endpoint da API.
+3. A API atualiza o estado interno ou os dados do jogo.
+4. O listener JavaScript da pagina do OBS observa o estado ou consome o endpoint.
+5. A stream recebe o feedback sonoro ou a atualizacao visual.
 
 ### Endpoints da feature Twitch
 
@@ -54,22 +66,45 @@ Status:
 	- Webpage blank para Browser Source do OBS
 
 - `GET /obs/nossa.mp3`
-	- Audio tocado quando houver novo trigger do reward `Goleiro`
+	- Audio tocado quando houver novo trigger do power-up na stream
 
 - `GET /mp3/<arquivo>.mp3`
 	- Arquivos novos usados pelos rewards mapeados no overlay
+
+### Endpoint Steam
+
+- `GET /steam/achievements/`
+	- Retorna as conquistas desbloqueadas e o total de conquistas do jogo da stream usando o SteamID64 configurado no Render.
+	- Resposta em texto puro no formato: `Outer Wilds: 2 de 31 (6,45% concluído)`
+	- Atualmente o mapping inclui: `Outer Wilds -> 753640`
+
+	- Requer as variaveis de ambiente `STEAM_WEB_API_KEY` e `STEAM_TARGET_STEAMID64`.
+
+### Estrutura de dados
+
+O arquivo `dados.json` guarda os contadores por jogo. Exemplo:
+
+```json
+{
+  "outer-wilds": {
+    "mortes": 20
+  }
+}
+```
+
+Isso permite manter o historico por jogo e usar a mesma base para futuras expansoes.
 
 ### Como usar no OBS (estado atual)
 
 1. Adicione uma Browser Source apontando para `https://seu-servico.onrender.com/obs/powerup`.
 2. Garanta que os arquivos de audio existam nas pastas `ogg/` e `mp3/` conforme o mapeamento do JavaScript.
 3. Dispare a criacao da assinatura em `/twitch/eventsub/subscribe`.
-4. Ao ocorrer um novo resgate `Goleiro`, a pagina deve tocar o audio.
+4. Ao ocorrer um novo resgate na Twitch, a pagina deve tocar o audio.
 
 ## Arquivos principais
 
 - `app.py`: API principal.
-- `dados.json`: arquivo com o valor atual do contador.
+- `dados.json`: arquivo com os dados por jogo.
 - `obs_browser_refresh.lua`: script para ser adicionado dentro do proprio OBS (Tools > Scripts) e forcar o refresh da Browser Source.
 - `obs_powerup.html`: webpage para Browser Source que escuta trigger de power-up e toca audio.
 
