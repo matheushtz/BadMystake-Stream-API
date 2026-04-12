@@ -8,8 +8,6 @@ var stateUrl = "/twitch/powerup/state";
 var pollIntervalMs = 1200;
 var lastSeq = null;
 
-var REWARD_ID_PLOL = "60863459-5e25-42d2-a49d-7a79fd13bf78";
-var REWARD_ID_GOLEIRO = "69a918e0-6ed7-461a-b76e-e8f4324cb66a";
 var REWARD_AUDIO_MAP = {
     "death-increment": "/ogg/morreu.ogg",
     "death-decrement": "/ogg/morreu.ogg",
@@ -28,19 +26,6 @@ var REWARD_AUDIO_MAP = {
 function normalizeId(value) {
     return String(value || "").trim().toLowerCase();
 }
-
-function registerRewardAudio(rewardId, audioPath) {
-    var normalizedRewardId = normalizeId(rewardId);
-
-    if (!normalizedRewardId || !audioPath) {
-        return;
-    }
-
-    REWARD_AUDIO_MAP[normalizedRewardId] = audioPath;
-}
-
-registerRewardAudio(REWARD_ID_PLOL, "/ogg/plol.ogg");
-registerRewardAudio(REWARD_ID_GOLEIRO, "/ogg/nossa.ogg");
 
 function getAudioDirectory(path) {
     var normalizedPath = normalizeId(path).split("?")[0];
@@ -122,10 +107,6 @@ function buildSoundPath(pedido) {
     return null;
 }
 
-function chooseAudioByPath(path) {
-    return getAudioByPath(path);
-}
-
 function sleepTime(timeMs) {
     return new Promise(function (resolve) {
         setTimeout(function () {
@@ -140,7 +121,6 @@ async function tryPlayAudio() {
         console.log("[DEBUG] tryPlayAudio - tocando:", audioLabel);
         activeAudio.currentTime = 0;
         await activeAudio.play();
-        return true;
     } catch (err) {
         console.log("[OBS] Falha ao tocar audio, tentando recarregar:", err);
         try {
@@ -148,10 +128,8 @@ async function tryPlayAudio() {
             await sleepTime(100);
             activeAudio.currentTime = 0;
             await activeAudio.play();
-            return true;
         } catch (err2) {
             console.log("[OBS] Reproducao bloqueada:", err2);
-            return false;
         }
     }
 }
@@ -164,7 +142,7 @@ function setAudioSource(path) {
         return;
     }
 
-    activeAudio = chooseAudioByPath(normalizedPath);
+    activeAudio = getAudioByPath(normalizedPath);
     activeAudioPath = normalizedPath;
     var audioName = activeAudioPath.split("/").pop() || "audio";
 
