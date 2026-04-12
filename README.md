@@ -37,7 +37,7 @@ Esse fluxo permite unir comandos do chat, eventos da Twitch e resposta visual/so
 - `TWITCH_DEV_ID`
 - `TWITCH_SECRET`
 - `TWITCH_TOKEN`
-- `STEAM_WEB_API_KEY`
+- `STEAM_WEB_API_KEY` (ou `STEAM_API_KEY`)
 - `STEAM_TARGET_STEAMID64`
 - `PUBLIC_BASE_URL` (exemplo: `https://seu-servico.onrender.com`)
 
@@ -78,7 +78,7 @@ O fluxo foi desenhado para ser simples de operar na live:
 	- Resposta em texto puro no formato: `Outer Wilds: 2 de 31 (6,45% concluído)`
 	- Atualmente o mapping inclui: `Outer Wilds -> 753640`
 
-	- Requer as variaveis de ambiente `STEAM_WEB_API_KEY` e `STEAM_TARGET_STEAMID64`.
+	- Requer as variaveis de ambiente `STEAM_WEB_API_KEY` (ou `STEAM_API_KEY`) e `STEAM_TARGET_STEAMID64`.
 
 ### Estrutura de dados
 

@@ -60,6 +60,7 @@ def get_env_status():
         "GITHUB_BRANCH": env_present("GITHUB_BRANCH"),
         "GITHUB_FILE_PATH": env_present("GITHUB_FILE_PATH"),
         "STEAM_WEB_API_KEY": env_present("STEAM_WEB_API_KEY"),
+        "STEAM_API_KEY": env_present("STEAM_API_KEY"),
         "STEAM_TARGET_STEAMID64": env_present("STEAM_TARGET_STEAMID64"),
         "TWITCH_CHANNEL_ID": env_present("TWITCH_CHANNEL_ID"),
         "TWITCH_DEV_ID": env_present("TWITCH_DEV_ID"),
@@ -81,7 +82,6 @@ def get_first_env(*names):
             return value
     return ""
 
-STEAM_TARGET_STEAMID64 = "76561198068386184"
 STEAM_GAME_APPIDS = {
     "Outer Wilds": 753640,
 }
@@ -90,7 +90,16 @@ def steam_target_steamid64():
     return get_first_env("STEAM_TARGET_STEAMID64")
 
 def steam_web_api_key():
-    return get_first_env("STEAM_WEB_API_KEY")
+    return get_first_env("STEAM_WEB_API_KEY", "STEAM_API_KEY")
+
+def is_valid_steam_web_api_key(api_key):
+    if not api_key:
+        return False
+
+    if len(api_key) != 32:
+        return False
+
+    return all(ch in "0123456789abcdefABCDEF" for ch in api_key)
 
 def get_steam_game_entry(game_name):
     if not game_name:
@@ -796,7 +805,12 @@ def steam_achievements():
     steamid64 = steam_target_steamid64()
     if not api_key:
         return {
-            "error": "Defina STEAM_WEB_API_KEY no ambiente para consultar as conquistas da Steam",
+            "error": "Defina STEAM_WEB_API_KEY (ou STEAM_API_KEY) no ambiente para consultar as conquistas da Steam",
+        }, 400
+
+    if not is_valid_steam_web_api_key(api_key):
+        return {
+            "error": "Steam API key invalida. Verifique se a chave possui 32 caracteres hexadecimais.",
         }, 400
 
     if not steamid64:
@@ -812,6 +826,12 @@ def steam_achievements():
             body = http_err.read().decode("utf-8")
         except Exception:
             body = "<sem corpo>"
+
+        if http_err.code == 403:
+            return {
+                "error": "Steam recusou a API key (HTTP 403). Gere/valide sua chave em steamcommunity.com/dev/apikey e confirme a variavel STEAM_WEB_API_KEY no Render.",
+            }, 502
+
         return {
             "error": f"Steam HTTP {http_err.code} - {body}",
         }, 502
