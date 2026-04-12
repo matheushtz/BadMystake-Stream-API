@@ -23,6 +23,22 @@ var REWARD_AUDIO_MAP = {
     "c820aa0b-e4dd-4e48-9558-36ec0a51d512": "/mp3/3h-algum-game.mp3"
 };
 
+// Mapeamento de volume para cada arquivo de áudio (0.0 a 1.0)
+var AUDIO_VOLUME_MAP = {
+    // OGG files
+    "/ogg/joker.ogg": 1.0,
+    "/ogg/morreu.ogg": 1.0,
+    "/ogg/nossa.ogg": 1.0,
+    "/ogg/plol.ogg": 0.5,
+    // MP3 files
+    "/mp3/3h-algum-game.mp3": 1.0,
+    "/mp3/3h-rocket-league.mp3": 1.0,
+    "/mp3/3h-runescape.mp3": 1.0,
+    "/mp3/aram-ate-perder.mp3": 1.0,
+    "/mp3/gamedle.mp3": 1.0,
+    "/mp3/live-sem-camisa.mp3": 1.0
+};
+
 function normalizeId(value) {
     return String(value || "").trim().toLowerCase();
 }
@@ -46,7 +62,7 @@ function getAudioByPath(path) {
 
     if (!audioCache[normalizedPath]) {
         var audio = new Audio(normalizedPath);
-        audio.volume = 1;
+        audio.volume = AUDIO_VOLUME_MAP[normalizedPath] !== undefined ? AUDIO_VOLUME_MAP[normalizedPath] : 1;
         audio.preload = "auto";
         audioCache[normalizedPath] = audio;
     }
