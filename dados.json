@@ -1,3 +1,8 @@
 {
-  "mortes": 20
+  "unknown": {
+    "mortes": 20
+  },
+  "outer-wilds": {
+    "mortes": 1
+  }
 }
