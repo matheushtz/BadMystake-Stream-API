@@ -1,0 +1,131 @@
+{
+  "info": {
+    "_postman_id": "d9ab6a76-0648-4b91-8fbe-08fca7aa59c1",
+    "name": "API Mazin - Stream Current Game",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Requests para validar retorno do jogo atual da stream."
+  },
+  "item": [
+    {
+      "name": "GET /stream/current-game",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Retorna texto nao vazio', function () {",
+              "  const body = pm.response.text().trim();",
+              "  pm.expect(body.length).to.be.above(0);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/stream/current-game",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "stream",
+            "current-game"
+          ]
+        },
+        "description": "Retorna somente o nome do jogo atual da stream em texto puro."
+      },
+      "response": []
+    },
+    {
+      "name": "GET /death/current-game",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('JSON com game_name, game_key e mortes', function () {",
+              "  const data = pm.response.json();",
+              "  pm.expect(data).to.have.property('game_name');",
+              "  pm.expect(data).to.have.property('game_key');",
+              "  pm.expect(data).to.have.property('mortes');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/death/current-game",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "death",
+            "current-game"
+          ]
+        },
+        "description": "Retorna dados completos do jogo atual e mortes no jogo."
+      },
+      "response": []
+    },
+    {
+      "name": "GET /steam/achievements?game={{game_name}}",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200 ou erro configuracao', function () {",
+              "  pm.expect([200, 400, 404, 500, 502]).to.include(pm.response.code);",
+              "});",
+              "",
+              "if (pm.response.code === 200) {",
+              "  pm.test('Resposta texto contem separador de progresso', function () {",
+              "    const body = pm.response.text();",
+              "    pm.expect(body).to.include(':');",
+              "  });",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/steam/achievements?game={{game_name}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "steam",
+            "achievements"
+          ],
+          "query": [
+            {
+              "key": "game",
+              "value": "{{game_name}}"
+            }
+          ]
+        },
+        "description": "Retorna progresso de conquistas Steam para o jogo informado."
+      },
+      "response": []
+    }
+  ]
+}
