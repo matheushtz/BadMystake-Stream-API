@@ -1,18 +1,7 @@
-var nossa = new Audio("/ogg/nossa.ogg");
-var morreu = new Audio("/ogg/morreu.ogg");
-var plol = new Audio("/ogg/plol.ogg");
 var audioCache = {};
+var DEFAULT_AUDIO_PATH = "/ogg/nossa.ogg";
 var activeAudio = null;
 var activeAudioPath = null;
-
-nossa.volume = 1;
-nossa.preload = "auto";
-
-morreu.volume = 1;
-morreu.preload = "auto";
-
-plol.volume = 1;
-plol.preload = "auto";
 
 var listaPedidos = [];
 var stateUrl = "/twitch/powerup/state";
@@ -68,11 +57,7 @@ function getAudioDirectory(path) {
 }
 
 function getAudioByPath(path) {
-    var normalizedPath = normalizeId(path).split("?")[0];
-
-    if (!normalizedPath) {
-        return nossa;
-    }
+    var normalizedPath = normalizeId(path).split("?")[0] || DEFAULT_AUDIO_PATH;
 
     if (!audioCache[normalizedPath]) {
         var audio = new Audio(normalizedPath);
