@@ -4,14 +4,17 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
+from html import unescape
 from urllib import error, parse, request as urllib_request
 
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FILE_PATH = os.path.join(BASE_DIR, "dados.json")
+STEAM_GAMES_FILE = os.path.join(BASE_DIR, "steam_games.json")
 OGG_DIR = os.path.join(BASE_DIR, "ogg")
 MP3_DIR = os.path.join(BASE_DIR, "mp3")
 DEFAULT_DATA = {}
@@ -82,10 +85,6 @@ def get_first_env(*names):
             return value
     return ""
 
-STEAM_GAME_APPIDS = {
-    "Outer Wilds": 753640,
-}
-
 def steam_target_steamid64():
     return get_first_env("STEAM_TARGET_STEAMID64")
 
@@ -101,14 +100,113 @@ def is_valid_steam_web_api_key(api_key):
 
     return all(ch in "0123456789abcdefABCDEF" for ch in api_key)
 
+def load_steam_games():
+    if not os.path.exists(STEAM_GAMES_FILE):
+        return {}
+
+    try:
+        with open(STEAM_GAMES_FILE, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+
+        if not content:
+            return {}
+
+        raw_data = json.loads(content)
+        if not isinstance(raw_data, dict):
+            return {}
+
+        normalized_data = {}
+        for game_name, appid in raw_data.items():
+            try:
+                normalized_data[str(game_name)] = int(appid)
+            except (TypeError, ValueError):
+                continue
+
+        return normalized_data
+    except Exception as exc:
+        print(f"[STEAM] Falha ao ler {STEAM_GAMES_FILE}: {exc}", flush=True)
+        return {}
+
+def save_steam_games(games):
+    serialized = json.dumps(games, ensure_ascii=False, indent=2, sort_keys=True)
+    with open(STEAM_GAMES_FILE, "w", encoding="utf-8") as f:
+        f.write(serialized)
+
+def find_cached_steam_game(game_name, games):
+    requested_name = normalize_game_name(game_name)
+
+    for mapped_name, appid in games.items():
+        if normalize_game_name(mapped_name) == requested_name:
+            try:
+                return mapped_name, int(appid)
+            except (TypeError, ValueError):
+                return mapped_name, None
+
+    return None, None
+
+def search_steam_store_game(game_name):
+    search_url = (
+        "https://store.steampowered.com/search/results/"
+        f"?term={parse.quote(game_name)}&format=json&count=10&category1=998&ndl=1"
+    )
+
+    req = urllib_request.Request(
+        search_url,
+        headers={"User-Agent": "death-counter-api"},
+        method="GET",
+    )
+
+    with urllib_request.urlopen(req, timeout=15) as response:
+        html = response.read().decode("utf-8", errors="replace")
+
+    row_pattern = re.compile(
+        r'<a[^>]*class="search_result_row[^\"]*"[^>]*>.*?</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    for match in row_pattern.finditer(html):
+        row_html = match.group(0)
+
+        appid_match = re.search(r'store\.steampowered\.com/app/(\d+)/', row_html, re.IGNORECASE)
+        if not appid_match:
+            continue
+
+        appid = appid_match.group(1)
+
+        title_match = re.search(r'<span class="title">([^<]+)</span>', row_html, re.IGNORECASE)
+        if title_match:
+            title = unescape(title_match.group(1)).strip()
+        else:
+            title = game_name.strip()
+
+        try:
+            return title, int(appid)
+        except (TypeError, ValueError):
+            continue
+
+    appid_match = re.search(r'store\.steampowered\.com/app/(\d+)/', html, re.IGNORECASE)
+    if appid_match:
+        try:
+            return game_name.strip(), int(appid_match.group(1))
+        except (TypeError, ValueError):
+            return None, None
+
+    return None, None
+
 def get_steam_game_entry(game_name):
     if not game_name:
         return None, None
 
-    requested_name = normalize_game_name(game_name)
-    for mapped_name, appid in STEAM_GAME_APPIDS.items():
-        if normalize_game_name(mapped_name) == requested_name:
-            return mapped_name, appid
+    games = load_steam_games()
+    cached_name, appid = find_cached_steam_game(game_name, games)
+    if cached_name and appid:
+        return cached_name, appid
+
+    store_name, store_appid = search_steam_store_game(game_name)
+    if store_name and store_appid:
+        games[store_name] = store_appid
+        save_steam_games(games)
+        return store_name, store_appid
 
     return None, None
 
@@ -796,9 +894,10 @@ def steam_achievements():
     mapped_name, appid = get_steam_game_entry(game_name)
 
     if not mapped_name or not appid:
+        available_games = sorted(load_steam_games().keys())
         return {
             "error": f"Jogo nao mapeado: {game_name}",
-            "available_games": list(STEAM_GAME_APPIDS.keys()),
+            "available_games": available_games,
         }, 404
 
     api_key = steam_web_api_key()
