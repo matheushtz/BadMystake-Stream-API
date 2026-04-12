@@ -102,6 +102,10 @@ python app.py
 - `GET /death/read/obs`
 	- Retorno: texto para overlay (exemplo: `16 mortes`)
 
+- `GET /death/current-game`
+- `GET /stream/current-game`
+	- Retorno: JSON com o jogo atual da stream, a chave normalizada e o contador de mortes do jogo atual
+
 ### Escrita
 
 - `GET|POST /death/increment`

@@ -669,6 +669,7 @@ def decrement():
 
 # Endpoint para obter informações do jogo atual
 @app.route("/death/current-game", methods=["GET"])
+@app.route("/stream/current-game", methods=["GET"])
 def get_current_game():
     game_name = get_current_game_from_twitch()
     if not game_name:
