@@ -104,7 +104,7 @@ python app.py
 
 - `GET /death/current-game`
 - `GET /stream/current-game`
-	- Retorno: JSON com o jogo atual da stream, a chave normalizada e o contador de mortes do jogo atual
+	- Retorno: apenas o `game_name` atual da stream em texto puro (ex: `Outer Wilds`)
 
 ### Escrita
 
