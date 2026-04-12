@@ -123,7 +123,7 @@
             }
           ]
         },
-        "description": "Retorna progresso de conquistas Steam para o jogo informado."
+        "description": "Retorna progresso de conquistas Steam para o jogo informado ou para o jogo atual da live quando o parametro vier vazio."
       },
       "response": []
     }

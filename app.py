@@ -132,6 +132,13 @@ def save_steam_games(games):
     with open(STEAM_GAMES_FILE, "w", encoding="utf-8") as f:
         f.write(serialized)
 
+    publish_file_to_github(
+        serialized,
+        default_file_path="steam_games.json",
+        commit_message="chore: update steam_games.json",
+        file_path_env="GITHUB_STEAM_GAMES_FILE_PATH",
+    )
+
 def find_cached_steam_game(game_name, games):
     requested_name = normalize_game_name(game_name)
 
@@ -581,7 +588,7 @@ def load_data():
     return dict(DEFAULT_DATA)
 
 # Salva os dados no arquivo local e publica no GitHub (se configurado)
-def get_github_publish_config():
+def get_github_publish_config(default_file_path="dados.json", file_path_env="GITHUB_FILE_PATH"):
     repository = (os.environ.get("GITHUB_REPOSITORY", "") or "").strip()
     repository_owner = None
     repository_name = None
@@ -601,12 +608,12 @@ def get_github_publish_config():
         "owner": repository_owner,
         "repo": repository_name,
         "branch": os.environ.get("GITHUB_BRANCH", "main"),
-        "file_path": os.environ.get("GITHUB_FILE_PATH", "dados.json"),
+        "file_path": (os.environ.get(file_path_env, "") or "").strip() or default_file_path,
     }
 
 # Publica o conteúdo no GitHub usando a API. O conteúdo deve ser uma string já formatada (ex: JSON).
-def publish_data_to_github(content):
-    config = get_github_publish_config()
+def publish_file_to_github(content, default_file_path="dados.json", commit_message=None, file_path_env="GITHUB_FILE_PATH"):
+    config = get_github_publish_config(default_file_path=default_file_path, file_path_env=file_path_env)
     token = config["token"]
     owner = config["owner"]
     repo = config["repo"]
@@ -646,7 +653,7 @@ def publish_data_to_github(content):
         return
 
     payload = {
-        "message": "chore: update dados.json",
+        "message": commit_message or f"chore: update {file_path}",
         "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
         "branch": branch,
     }
@@ -676,9 +683,12 @@ def publish_data_to_github(content):
             body = http_err.read().decode("utf-8")
         except Exception:
             body = "<sem corpo>"
-        print(f"Falha ao publicar dados.json no GitHub: HTTP {http_err.code} - {body}")
+        print(f"Falha ao publicar {file_path} no GitHub: HTTP {http_err.code} - {body}")
     except Exception as exc:
-        print(f"Falha ao publicar dados.json no GitHub: {exc}")
+        print(f"Falha ao publicar {file_path} no GitHub: {exc}")
+
+def publish_data_to_github(content):
+    publish_file_to_github(content, default_file_path="dados.json", commit_message="chore: update dados.json", file_path_env="GITHUB_FILE_PATH")
 
 # Salva os dados no arquivo local e publica no GitHub (se configurado)
 def save_data(data):
@@ -688,6 +698,17 @@ def save_data(data):
         f.write(serialized_data)
 
     publish_data_to_github(serialized_data)
+
+def resolve_steam_achievement_game_name():
+    requested_game = (request.args.get("game") or "").strip()
+    if requested_game:
+        return requested_game
+
+    current_game = get_current_game_from_twitch()
+    if current_game:
+        return current_game.strip()
+
+    return "Outer Wilds"
 
 # Tenta converter o valor para int, float, bool ou None. Se não for possível, retorna a string original.
 def parse_value(value):
@@ -890,7 +911,7 @@ def get_current_game():
 @app.route("/steam/achievements", methods=["GET"])
 @app.route("/steam/achievements/", methods=["GET"])
 def steam_achievements():
-    game_name = (request.args.get("game") or "Outer Wilds").strip()
+    game_name = resolve_steam_achievement_game_name()
     mapped_name, appid = get_steam_game_entry(game_name)
 
     if not mapped_name or not appid:

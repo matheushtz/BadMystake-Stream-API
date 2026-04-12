@@ -40,6 +40,9 @@ Esse fluxo permite unir comandos do chat, eventos da Twitch e resposta visual/so
 - `STEAM_WEB_API_KEY` (ou `STEAM_API_KEY`)
 - `STEAM_TARGET_STEAMID64`
 - `PUBLIC_BASE_URL` (exemplo: `https://seu-servico.onrender.com`)
+- `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`
+- `GITHUB_FILE_PATH` para publicar `dados.json`
+- `GITHUB_STEAM_GAMES_FILE_PATH` para publicar `steam_games.json`
 
 ### Como funciona a integracao com o chat
 
@@ -75,8 +78,10 @@ O fluxo foi desenhado para ser simples de operar na live:
 
 - `GET /steam/achievements/`
 	- Retorna as conquistas desbloqueadas e o total de conquistas do jogo da stream usando o SteamID64 configurado no Render.
+	- Se `?game=` nao for enviado, usa o jogo atual da live vindo da Twitch.
 	- Resposta em texto puro no formato: `Outer Wilds: 2 de 31 (6,45% concluído)`
 	- Atualmente o mapping inclui: `Outer Wilds -> 753640`
+	- Quando um jogo novo precisa ser resolvido, o mapa local `steam_games.json` e atualizado e pode ser publicado automaticamente no GitHub se as variaveis de publish estiverem configuradas.
 
 	- Requer as variaveis de ambiente `STEAM_WEB_API_KEY` (ou `STEAM_API_KEY`) e `STEAM_TARGET_STEAMID64`.
 
