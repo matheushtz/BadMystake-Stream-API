@@ -14,7 +14,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FILE_PATH = os.path.join(BASE_DIR, "dados.json")
 OGG_DIR = os.path.join(BASE_DIR, "ogg")
 MP3_DIR = os.path.join(BASE_DIR, "mp3")
-DEFAULT_DATA = {"mortes": 0}
+DEFAULT_DATA = {}
 
 APP_BOOT_TIME = int(os.times().elapsed)
 
@@ -97,6 +97,74 @@ def twitch_access_token():
         return ""
 
     return get_twitch_app_access_token(client_id, client_secret)
+
+def normalize_game_name(game_name):
+    """Normaliza o nome do jogo para usar como chave no JSON.
+    Ex: 'Outer Wilds' -> 'outer-wilds'
+    """
+    if not game_name:
+        return "unknown"
+    
+    # Remove espaços extras e converte para minúsculas
+    normalized = game_name.strip().lower()
+    
+    # Substitui múltiplos espaços por hífen único
+    normalized = "-".join(normalized.split())
+    
+    # Remove caracteres especiais, mantendo apenas alfanuméricos e hífens
+    normalized = "".join(c if c.isalnum() or c == "-" else "" for c in normalized)
+    
+    # Remove hífens duplicados
+    while "--" in normalized:
+        normalized = normalized.replace("--", "-")
+    
+    # Remove hífens nas extremidades
+    normalized = normalized.strip("-")
+    
+    return normalized or "unknown"
+
+def get_current_game_from_twitch():
+    """Busca o jogo atual do canal na Twitch.
+    Retorna o nome do jogo ou None se não conseguir buscar.
+    """
+    channel_id = (os.environ.get("TWITCH_CHANNEL_ID", "") or "").strip()
+    client_id = twitch_client_id()
+    
+    if not channel_id or not client_id:
+        print("[TWITCH] Não foi possível buscar jogo: TWITCH_CHANNEL_ID ou TWITCH_CLIENT_ID não configurados", flush=True)
+        return None
+    
+    try:
+        access_token = twitch_access_token()
+        if not access_token:
+            print("[TWITCH] Não foi possível obter access token para buscar jogo atual", flush=True)
+            return None
+        
+        api_url = f"https://api.twitch.tv/helix/channels?broadcaster_id={channel_id}"
+        headers = {
+            "Client-Id": client_id,
+            "Authorization": f"Bearer {access_token}",
+        }
+        
+        req = urllib_request.Request(api_url, headers=headers, method="GET")
+        with urllib_request.urlopen(req, timeout=10) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+            data = response_data.get("data", [])
+            if data and len(data) > 0:
+                game_name = data[0].get("game_name")
+                if game_name:
+                    print(f"[TWITCH] Jogo atual encontrado: {game_name}", flush=True)
+                    return game_name
+    except error.HTTPError as http_err:
+        try:
+            body = http_err.read().decode("utf-8")
+        except Exception:
+            body = "<sem corpo>"
+        print(f"[TWITCH] Erro ao buscar jogo atual: HTTP {http_err.code} - {body}", flush=True)
+    except Exception as exc:
+        print(f"[TWITCH] Erro ao buscar jogo atual: {exc}", flush=True)
+    
+    return None
 
 def is_valid_twitch_timestamp(timestamp_raw):
     if not timestamp_raw:
@@ -292,11 +360,20 @@ def load_data():
     try:
         data = json.loads(content)
         if isinstance(data, dict):
+            # Detecta formato antigo: {"mortes": X} e faz migração
+            if "mortes" in data and len(data) == 1 and isinstance(data.get("mortes"), (int, str)):
+                # Formato antigo - migrar para novo formato com jogo "unknown"
+                try:
+                    mortes_count = int(data["mortes"])
+                except (TypeError, ValueError):
+                    mortes_count = 0
+                print("[MIGRAÇÃO] Detectado formato antigo de dados. Migrando para novo formato por jogo.", flush=True)
+                return {"unknown": {"mortes": mortes_count}}
             return data
     except json.JSONDecodeError:
         pass
 
-    # Migra formato antigo: MORTES: X
+    # Compatibilidade com formato antigo: MORTES: X
     first_line = content.splitlines()[0] if content.splitlines() else ""
     if first_line.upper().startswith("MORTES:"):
         raw_value = first_line.split(":", 1)[1].strip()
@@ -304,7 +381,8 @@ def load_data():
             mortes = int(raw_value)
         except ValueError:
             mortes = 0
-        return {"mortes": mortes}
+        print("[MIGRAÇÃO] Detectado formato muito antigo (MORTES: X). Migrando para novo formato por jogo.", flush=True)
+        return {"unknown": {"mortes": mortes}}
 
     return dict(DEFAULT_DATA)
 
@@ -443,45 +521,90 @@ def parse_value(value):
 
     return value
 
-# Incrementa o contador de mortes no arquivo e retorna o novo total.
+# Incrementa o contador de mortes no arquivo para o jogo atual e retorna o novo total.
 def increment_deaths_in_file():
+    game_name = get_current_game_from_twitch()
+    if not game_name:
+        print("[WARNING] Não foi possível obter o jogo atual. Usando 'unknown'.", flush=True)
+        game_name = "unknown"
+    
+    game_key = normalize_game_name(game_name)
     data = load_data()
-
-    raw_current = data.get("mortes", 0)
+    
+    # Garante que o jogo existe no dicionário
+    if game_key not in data or not isinstance(data[game_key], dict):
+        data[game_key] = {"mortes": 0}
+    
+    # Incrementa o contador de mortes para o jogo
+    raw_current = data[game_key].get("mortes", 0)
     try:
         current_total = int(raw_current)
     except (TypeError, ValueError):
         current_total = 0
-
+    
     new_total = current_total + 1
-    data["mortes"] = new_total
+    data[game_key]["mortes"] = new_total
     save_data(data)
-
+    
+    print(f"[MORTE] Incrementado: {game_key} agora tem {new_total} mortes", flush=True)
     return new_total
 
-# Decrementa o contador de mortes no arquivo e retorna o novo total.
+# Decrementa o contador de mortes no arquivo para o jogo atual e retorna o novo total.
 def decrement_deaths_in_file():
+    game_name = get_current_game_from_twitch()
+    if not game_name:
+        print("[WARNING] Não foi possível obter o jogo atual. Usando 'unknown'.", flush=True)
+        game_name = "unknown"
+    
+    game_key = normalize_game_name(game_name)
     data = load_data()
-
-    raw_current = data.get("mortes", 0)
+    
+    # Garante que o jogo existe no dicionário  
+    if game_key not in data or not isinstance(data[game_key], dict):
+        data[game_key] = {"mortes": 0}
+    
+    # Decrementa o contador de mortes para o jogo
+    raw_current = data[game_key].get("mortes", 0)
     try:
         current_total = int(raw_current)
     except (TypeError, ValueError):
         current_total = 0
-
+    
     new_total = current_total - 1
-    data["mortes"] = new_total
+    data[game_key]["mortes"] = new_total
     save_data(data)
-
+    
+    print(f"[MORTE] Decrementado: {game_key} agora tem {new_total} mortes", flush=True)
     return new_total
 
-# Lê o valor atual de mortes do arquivo, tentando garantir que seja um inteiro. Se não for possível, retorna 0.
+# Lê o valor atual de mortes do jogo atual do arquivo, tentando garantir que seja um inteiro. Se não for possível, retorna 0.
 def get_mortes_value(data):
-    raw_value = data.get("mortes", 0)
+    game_name = get_current_game_from_twitch()
+    if not game_name:
+        game_name = "unknown"
+    
+    game_key = normalize_game_name(game_name)
+    
+    if game_key not in data or not isinstance(data[game_key], dict):
+        return 0
+    
+    raw_value = data[game_key].get("mortes", 0)
     try:
         return int(raw_value)
     except (TypeError, ValueError):
         return 0
+
+# Retorna o total global de mortes (soma de todos os jogos)
+def get_total_mortes_all_games(data):
+    total = 0
+    for game_key, game_data in data.items():
+        if isinstance(game_data, dict):
+            raw_value = game_data.get("mortes", 0)
+            try:
+                total += int(raw_value)
+            except (TypeError, ValueError):
+                pass
+    return total
 
 # Endpoint para SALVAR texto
 @app.route("/death/save", methods=["GET", "POST"])
@@ -504,19 +627,31 @@ def save():
 @app.route("/death/read", methods=["GET"])
 def read_text_file():
     data = load_data()
-    return str(get_mortes_value(data))
+    all_games = request.args.get("all", "").lower() in ["true", "1", "yes"]
+    
+    if all_games:
+        return str(get_total_mortes_all_games(data))
+    else:
+        return str(get_mortes_value(data))
 
 # Endpoint para LER o valor atual de mortes em formato de observação (ex: "X mortes")
 @app.route("/death/read/obs", methods=["GET"])
 def read_text_observation():
     data = load_data()
-    return f"{get_mortes_value(data)} MORTES"
+    all_games = request.args.get("all", "").lower() in ["true", "1", "yes"]
+    
+    if all_games:
+        mortes = get_total_mortes_all_games(data)
+    else:
+        mortes = get_mortes_value(data)
+    
+    return f"{mortes} MORTES"
 
 # Endpoint opcional para limpar arquivo
 @app.route("/death/clear", methods=["GET"])
 def clear():
     save_data(dict(DEFAULT_DATA))
-    return str(DEFAULT_DATA["mortes"])
+    return "0"
 
 # Endpoint para INCREMENTAR o contador de mortes
 @app.route("/death/increment", methods=["GET", "POST"])
@@ -529,7 +664,43 @@ def increment():
 @app.route("/death/decrement", methods=["GET", "POST"])
 def decrement():
     new_total = decrement_deaths_in_file()
+    trigger_death_decrement_event(new_total)
     return str(new_total)
+
+# Endpoint para obter informações do jogo atual
+@app.route("/death/current-game", methods=["GET"])
+def get_current_game():
+    game_name = get_current_game_from_twitch()
+    if not game_name:
+        game_name = "unknown"
+    
+    game_key = normalize_game_name(game_name)
+    data = load_data()
+    mortes = 0
+    
+    if game_key in data and isinstance(data[game_key], dict):
+        raw_value = data[game_key].get("mortes", 0)
+        try:
+            mortes = int(raw_value)
+        except (TypeError, ValueError):
+            mortes = 0
+    
+    return {
+        "game_name": game_name,
+        "game_key": game_key,
+        "mortes": mortes,
+    }, 200
+
+# Endpoint para retornar todos os dados de mortes por jogo
+@app.route("/death/all", methods=["GET"])
+def get_all_deaths():
+    data = load_data()
+    total = get_total_mortes_all_games(data)
+    
+    return {
+        "total": total,
+        "games": data,
+    }, 200
 
 # Endpoint raiz para verificar se a API está respondendo
 @app.route("/", methods=["GET", "HEAD"])

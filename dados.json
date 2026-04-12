@@ -1,3 +1,8 @@
 {
-  "mortes": 18
+  "outer-wilds": {
+    "mortes": 0
+  },
+  "resident-evil-2": {
+    "mortes": 18
+  }
 }
