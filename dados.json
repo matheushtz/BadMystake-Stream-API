@@ -8,7 +8,9 @@
   "old-school-runescape": {
     "mortes": 1
   },
-  "torchlight-infinite": 860,
+  "torchlight-infinite": {
+    "mortes": 863
+  },
   "league-of-legends": {
     "mortes": 1
   }
