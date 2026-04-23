@@ -11,7 +11,7 @@ Esta aplicacao foi pensada para rodar no host do Render.
 
 ## O que o programa faz
 
-1. Mantem dados por jogo em `dados.json`, usando chave com o nome do jogo.
+1. Mantem dados por jogo em `dados.json`, usando chave normalizada do nome do jogo (ex: `torchlight-infinite`).
 2. Recebe comandos do chat via endpoints expostos para integrarem com Nightbot ou automacoes similares.
 3. Recebe eventos da Twitch via listener/webhook e dispara feedback sonoro na stream.
 4. Retorna informacoes de progresso de conquistas da Steam para o jogo atual da live.
@@ -143,24 +143,56 @@ python app.py
 	- Retorno: texto para overlay (exemplo: `16 mortes`)
 
 - `GET /death/current-game`
+	- Retorno JSON com `game_name`, `game_key` e `mortes` do jogo atual
+
+- `GET /death/all`
+	- Retorno JSON com total geral e todos os jogos no formato salvo em `dados.json`
+
 - `GET /stream/current-game`
 	- Retorno: apenas o `game_name` atual da stream em texto puro (ex: `Outer Wilds`)
 
 ### Escrita
 
 - `GET|POST /death/increment`
-	- Soma 1 no contador
+	- Soma 1 no contador do jogo atual da stream
+
+- `GET|POST /death/decrement`
+	- Subtrai 1 no contador do jogo atual da stream
 
 - `GET /death/clear`
-	- Reseta o contador para `0`
+	- Limpa os dados e volta para o estado padrao
 
 - `GET|POST /death/save`
-	- Salva chave/valor no JSON
+	- Salva o contador por jogo no mesmo formato dos demais endpoints de mortes
+	- Parametros aceitos (prioridade):
+		- `jogo` (ou `game`)
+		- `mortes`
+	- Compatibilidade legada mantida:
+		- `key` e `value`
+	- Exemplo de body JSON recomendado:
+
+```json
+{
+  "jogo": "torchlight infinite",
+  "mortes": 860
+}
+```
+
+	- Exemplo de persistencia em `dados.json`:
+
+```json
+{
+  "torchlight-infinite": {
+    "mortes": 860
+  }
+}
+```
+
+	- Retorno: numero salvo em texto puro (ex: `860`)
 
 ### Operacional
 
 - `GET /`
-- `GET /health`
 - `GET /healthz`
 
 Todas retornam status `200` quando o servico esta saudavel.
