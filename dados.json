@@ -1,8 +1,15 @@
 {
-  "Resident Evil 2": {
-    "mortes": 20
-  },
   "outer-wilds": {
-    "mortes": 3
+    "mortes": 14
+  },
+  "resident-evil-2": {
+    "mortes": 34
+  },
+  "old-school-runescape": {
+    "mortes": 1
+  },
+  "torchlight-infinite": 860,
+  "league-of-legends": {
+    "mortes": 1
   }
 }
