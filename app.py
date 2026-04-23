@@ -825,17 +825,47 @@ def get_total_mortes_all_games(data):
 @app.route("/death/save", methods=["GET", "POST"])
 def save():
     payload = request.get_json(silent=True) or {}
-    key = request.args.get("key") or request.form.get("key") or payload.get("key")
-    value = request.args.get("value") or request.form.get("value") or payload.get("value")
+    game_name = (
+        request.args.get("jogo")
+        or request.form.get("jogo")
+        or payload.get("jogo")
+        or request.args.get("game")
+        or request.form.get("game")
+        or payload.get("game")
+        or request.args.get("key")
+        or request.form.get("key")
+        or payload.get("key")
+    )
+    mortes_value = (
+        request.args.get("mortes")
+        or request.form.get("mortes")
+        or payload.get("mortes")
+        or request.args.get("value")
+        or request.form.get("value")
+        or payload.get("value")
+    )
 
-    if not key:
-        return {"error": "Nenhuma chave enviada"}, 400
+    if not game_name:
+        return {"error": "Nenhum jogo enviado"}, 400
 
+    if mortes_value is None:
+        return {"error": "Nenhum valor de mortes enviado"}, 400
+
+    try:
+        mortes = int(parse_value(mortes_value))
+    except (TypeError, ValueError):
+        return {"error": "Valor de mortes invalido"}, 400
+
+    game_key = normalize_game_name(str(game_name))
     data = load_data()
-    data[str(key)] = parse_value(value)
+
+    if game_key not in data or not isinstance(data[game_key], dict):
+        data[game_key] = {"mortes": 0}
+
+    data[game_key]["mortes"] = mortes
     save_data(data)
 
-    return str(get_mortes_value(data))
+    return str(mortes)
 
 # Endpoint para LER o valor atual de mortes
 @app.route("/death/get", methods=["GET"])
