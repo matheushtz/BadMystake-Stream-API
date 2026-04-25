@@ -44,6 +44,26 @@ Esse fluxo permite unir comandos do chat, eventos da Twitch e resposta visual/so
 - `GITHUB_FILE_PATH` para publicar `dados.json`
 - `GITHUB_STEAM_GAMES_FILE_PATH` para publicar `steam_games.json`
 
+### TTS rewards
+
+To make a Twitch channel point reward speak the user message in the OBS overlay, configure the reward IDs in:
+
+- `TWITCH_TTS_REWARD_IDS`
+- `TWITCH_TTS_REWARD_ID` (single reward ID fallback)
+- `TWITCH_TTS_LANG` (optional, defaults to `pt-BR`)
+
+When a configured reward is redeemed, the webhook adds `tts_text` to the event payload. The OBS webpage then uses the browser speech engine to read the message instead of playing an MP3/OGG file.
+
+The text spoken by TTS is taken from the reward `user_input` field. If that field is empty, the overlay falls back to a short sentence built from the user name and reward title.
+
+For quick testing without Twitch, use:
+
+```bash
+/twitch/powerup/test?text=Mensagem+de+teste
+```
+
+If `text` is omitted, the test endpoint keeps the legacy audio playback path.
+
 ### Como funciona a integracao com o chat
 
 O fluxo foi desenhado para ser simples de operar na live:

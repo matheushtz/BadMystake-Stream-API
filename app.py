@@ -18,6 +18,10 @@ STEAM_GAMES_FILE = os.path.join(BASE_DIR, "steam_games.json")
 OGG_DIR = os.path.join(BASE_DIR, "ogg")
 MP3_DIR = os.path.join(BASE_DIR, "mp3")
 DEFAULT_DATA = {}
+DEFAULT_TTS_REWARD_IDENTIFIERS = {
+    "965c119b-f6c7-4418-a407-dd6084e6c591",
+    "toca mensagem (tts)",
+}
 
 APP_BOOT_TIME = int(os.times().elapsed)
 
@@ -72,6 +76,9 @@ def get_env_status():
         "TWITCH_WEBHOOK_SECRET": env_present("TWITCH_WEBHOOK_SECRET"),
         "TWITCH_CLIENT_ID": env_present("TWITCH_CLIENT_ID"),
         "TWITCH_CLIENT_SECRET": env_present("TWITCH_CLIENT_SECRET"),
+        "TWITCH_TTS_REWARD_IDS": env_present("TWITCH_TTS_REWARD_IDS"),
+        "TWITCH_TTS_REWARD_ID": env_present("TWITCH_TTS_REWARD_ID"),
+        "TWITCH_TTS_LANG": env_present("TWITCH_TTS_LANG"),
         "PORT": env_present("PORT"),
     }
 
@@ -84,6 +91,67 @@ def get_first_env(*names):
         if value:
             return value
     return ""
+
+def get_env_identifiers(*names):
+    identifiers = set()
+
+    for name in names:
+        raw_value = (os.environ.get(name, "") or "").strip()
+        if not raw_value:
+            continue
+
+        for part in re.split(r"[,;\n]+", raw_value):
+            normalized = part.strip().lower()
+            if normalized:
+                identifiers.add(normalized)
+
+    return identifiers
+
+def normalize_tts_text(text, max_length=240):
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(normalized) > max_length:
+        normalized = normalized[:max_length].rstrip() + "..."
+    return normalized
+
+def get_tts_reward_identifiers():
+    configured_identifiers = set(DEFAULT_TTS_REWARD_IDENTIFIERS)
+    configured_identifiers.update(get_env_identifiers("TWITCH_TTS_REWARD_IDS", "TWITCH_TTS_REWARD_ID"))
+    return configured_identifiers
+
+def is_tts_reward(reward):
+    if not isinstance(reward, dict):
+        return False
+
+    configured_identifiers = get_tts_reward_identifiers()
+    if not configured_identifiers:
+        return False
+
+    reward_id = str(reward.get("id", "") or "").strip().lower()
+    reward_title = str(reward.get("title", "") or "").strip().lower()
+    return reward_id in configured_identifiers or reward_title in configured_identifiers
+
+def build_tts_text(event_payload):
+    if not isinstance(event_payload, dict):
+        return ""
+
+    user_input = normalize_tts_text(event_payload.get("user_input", ""))
+    if user_input:
+        return user_input
+
+    user_name = normalize_tts_text(event_payload.get("user_name", ""))
+    reward = event_payload.get("reward", {}) if isinstance(event_payload.get("reward", {}), dict) else {}
+    reward_title = normalize_tts_text(reward.get("title", ""))
+
+    parts = []
+    if user_name:
+        parts.append(user_name)
+
+    if reward_title:
+        if parts:
+            parts.append("resgatou")
+        parts.append(reward_title)
+
+    return normalize_tts_text(" ".join(parts))
 
 def steam_target_steamid64():
     return get_first_env("STEAM_TARGET_STEAMID64")
@@ -409,14 +477,21 @@ def mark_powerup_trigger(event_payload):
     
     POWERUP_EVENT_STATE["last_event"] = event_payload
 
-def trigger_powerup_test(label="TESTE"):
-    mark_powerup_trigger({
+def trigger_powerup_test(label="TESTE", tts_text=None):
+    event_payload = {
         "reward": {
             "title": label,
         },
         "source": "powerup-test",
-        "sound_file": "nossa.ogg",
-    })
+    }
+
+    if tts_text:
+        event_payload["tts_text"] = normalize_tts_text(tts_text)
+        event_payload["tts_lang"] = get_first_env("TWITCH_TTS_LANG") or "pt-BR"
+    else:
+        event_payload["sound_file"] = "nossa.ogg"
+
+    mark_powerup_trigger(event_payload)
 
 def trigger_death_increment_event(total_value):
     mark_powerup_trigger({
@@ -1074,9 +1149,16 @@ def twitch_eventsub_webhook():
         reward = event.get("reward", {}) if isinstance(event.get("reward", {}), dict) else {}
         reward_title = str(reward.get("title", "")).strip()
         reward_id = str(reward.get("id", "")).strip()
+        event_payload = dict(event)
 
         if should_process_reward(reward):
-            mark_powerup_trigger(event)
+            if is_tts_reward(reward):
+                tts_text = build_tts_text(event_payload)
+                if tts_text:
+                    event_payload["tts_text"] = tts_text
+                    event_payload["tts_lang"] = get_first_env("TWITCH_TTS_LANG") or "pt-BR"
+
+            mark_powerup_trigger(event_payload)
             print(f"[TWITCH] Resgate processado id={reward_id} title={reward_title}", flush=True)
         else:
             print(f"[TWITCH] Resgate ignorado id={reward_id} title={reward_title}", flush=True)
@@ -1102,11 +1184,13 @@ def twitch_powerup_state():
 @app.route("/twitch/powerup/test", methods=["GET", "POST"])
 def twitch_powerup_test():
     label = request.args.get("label") or request.form.get("label") or "TESTE"
-    trigger_powerup_test(label)
+    text = request.args.get("text") or request.form.get("text") or ""
+    trigger_powerup_test(label, text)
     return {
         "status": "ok",
         "message": "powerup test triggered",
         "label": label,
+        "text": text,
         "seq": POWERUP_EVENT_STATE["seq"],
     }, 200
 

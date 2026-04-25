@@ -1,5 +1,6 @@
 var audioCache = {};
 var DEFAULT_AUDIO_PATH = "/ogg/nossa.ogg";
+var DEFAULT_TTS_LANG = "pt-BR";
 var activeAudio = null;
 var activeAudioPath = null;
 
@@ -41,6 +42,10 @@ var AUDIO_VOLUME_MAP = {
 
 function normalizeId(value) {
     return String(value || "").trim().toLowerCase();
+}
+
+function normalizeSpeechText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function getAudioDirectory(path) {
@@ -123,6 +128,63 @@ function buildSoundPath(pedido) {
     return null;
 }
 
+function buildTtsText(pedido) {
+    if (!pedido || typeof pedido !== "object") {
+        return "";
+    }
+
+    var text = normalizeSpeechText(pedido.tts_text);
+    if (text) {
+        return text;
+    }
+
+    return "";
+}
+
+function speakText(text, lang) {
+    return new Promise(function (resolve) {
+        if (!window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
+            resolve();
+            return;
+        }
+
+        var utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = lang || DEFAULT_TTS_LANG;
+        utterance.rate = 1;
+        utterance.pitch = 1;
+        utterance.volume = 1;
+
+        var done = false;
+        var finish = function () {
+            if (done) {
+                return;
+            }
+
+            done = true;
+            resolve();
+        };
+
+        var timeoutId = window.setTimeout(finish, Math.max(2500, text.length * 60));
+
+        utterance.onend = function () {
+            window.clearTimeout(timeoutId);
+            finish();
+        };
+
+        utterance.onerror = function () {
+            window.clearTimeout(timeoutId);
+            finish();
+        };
+
+        try {
+            window.speechSynthesis.speak(utterance);
+        } catch (error) {
+            window.clearTimeout(timeoutId);
+            finish();
+        }
+    });
+}
+
 function sleepTime(timeMs) {
     return new Promise(function (resolve) {
         setTimeout(function () {
@@ -202,6 +264,13 @@ async function lista() {
     while (true) {
         if (listaPedidos.length > 0) {
             var pedido = listaPedidos.shift();
+            var ttsText = buildTtsText(pedido);
+
+            if (ttsText) {
+                await speakText(ttsText, pedido.tts_lang || DEFAULT_TTS_LANG);
+                continue;
+            }
+
             var soundPath = buildSoundPath(pedido);
 
             if (!soundPath) {
