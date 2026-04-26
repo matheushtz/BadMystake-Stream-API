@@ -1,6 +1,7 @@
 var audioCache = {};
 var DEFAULT_AUDIO_PATH = "/ogg/nossa.ogg";
 var DEFAULT_TTS_LANG = "pt-BR";
+var TTS_VOICES_TIMEOUT_MS = 1800;
 var activeAudio = null;
 var activeAudioPath = null;
 
@@ -141,47 +142,109 @@ function buildTtsText(pedido) {
     return "";
 }
 
-function speakText(text, lang) {
+function waitForTtsVoices(timeoutMs) {
     return new Promise(function (resolve) {
-        if (!window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
-            resolve();
+        if (!window.speechSynthesis || typeof window.speechSynthesis.getVoices !== "function") {
+            resolve(false);
             return;
         }
 
-        var utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = lang || DEFAULT_TTS_LANG;
-        utterance.rate = 1;
-        utterance.pitch = 1;
-        utterance.volume = 1;
-
-        var done = false;
-        var finish = function () {
-            if (done) {
+        try {
+            var voicesNow = window.speechSynthesis.getVoices();
+            if (Array.isArray(voicesNow) && voicesNow.length > 0) {
+                resolve(true);
                 return;
             }
 
-            done = true;
-            resolve();
-        };
+            var done = false;
+            var finish = function (hasVoices) {
+                if (done) {
+                    return;
+                }
 
-        var timeoutId = window.setTimeout(finish, Math.max(2500, text.length * 60));
+                done = true;
+                window.speechSynthesis.removeEventListener("voiceschanged", onVoicesChanged);
+                resolve(Boolean(hasVoices));
+            };
 
-        utterance.onend = function () {
-            window.clearTimeout(timeoutId);
-            finish();
-        };
+            var onVoicesChanged = function () {
+                try {
+                    var voices = window.speechSynthesis.getVoices();
+                    finish(Array.isArray(voices) && voices.length > 0);
+                } catch (err) {
+                    finish(false);
+                }
+            };
 
-        utterance.onerror = function () {
-            window.clearTimeout(timeoutId);
-            finish();
-        };
-
-        try {
-            window.speechSynthesis.speak(utterance);
+            window.speechSynthesis.addEventListener("voiceschanged", onVoicesChanged);
+            window.setTimeout(function () {
+                onVoicesChanged();
+            }, timeoutMs);
         } catch (error) {
-            window.clearTimeout(timeoutId);
-            finish();
+            resolve(false);
         }
+    });
+}
+
+function speakText(text, lang) {
+    return new Promise(function (resolve) {
+        if (!window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
+            console.log("[OBS][TTS] Speech API indisponível no Browser Source");
+            resolve(false);
+            return;
+        }
+
+        waitForTtsVoices(TTS_VOICES_TIMEOUT_MS).then(function (hasVoices) {
+            if (!hasVoices) {
+                console.log("[OBS][TTS] Nenhuma voz carregada no navegador do OBS");
+            }
+
+            var utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = lang || DEFAULT_TTS_LANG;
+            utterance.rate = 1;
+            utterance.pitch = 1;
+            utterance.volume = 1;
+
+            var done = false;
+            var spoken = false;
+            var finish = function () {
+                if (done) {
+                    return;
+                }
+
+                done = true;
+                resolve(spoken);
+            };
+
+            var timeoutId = window.setTimeout(function () {
+                console.log("[OBS][TTS] Timeout ao aguardar fim da fala");
+                finish();
+            }, Math.max(2500, text.length * 80));
+
+            utterance.onstart = function () {
+                spoken = true;
+            };
+
+            utterance.onend = function () {
+                window.clearTimeout(timeoutId);
+                finish();
+            };
+
+            utterance.onerror = function (event) {
+                console.log("[OBS][TTS] Erro ao falar:", event && event.error ? event.error : event);
+                window.clearTimeout(timeoutId);
+                finish();
+            };
+
+            try {
+                window.speechSynthesis.cancel();
+                window.speechSynthesis.speak(utterance);
+            } catch (error) {
+                console.log("[OBS][TTS] Exceção ao chamar speak():", error);
+                window.clearTimeout(timeoutId);
+                finish();
+            }
+        });
     });
 }
 
@@ -267,7 +330,14 @@ async function lista() {
             var ttsText = buildTtsText(pedido);
 
             if (ttsText) {
-                await speakText(ttsText, pedido.tts_lang || DEFAULT_TTS_LANG);
+                var ttsPlayed = await speakText(ttsText, pedido.tts_lang || DEFAULT_TTS_LANG);
+
+                if (!ttsPlayed) {
+                    console.log("[OBS][TTS] Fallback para áudio por falha/bloqueio do TTS");
+                    setAudioSource(DEFAULT_AUDIO_PATH);
+                    await tryPlayAudio();
+                }
+
                 continue;
             }
 
