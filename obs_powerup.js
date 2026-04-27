@@ -331,11 +331,8 @@ async function lista() {
 
             if (ttsText) {
                 var ttsPlayed = await speakText(ttsText, pedido.tts_lang || DEFAULT_TTS_LANG);
-
                 if (!ttsPlayed) {
-                    console.log("[OBS][TTS] Fallback para áudio por falha/bloqueio do TTS");
-                    setAudioSource(DEFAULT_AUDIO_PATH);
-                    await tryPlayAudio();
+                    console.log("[OBS][TTS] Evento com texto recebido, mas sem reprodução TTS");
                 }
 
                 continue;
