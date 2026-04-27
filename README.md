@@ -46,15 +46,19 @@ Esse fluxo permite unir comandos do chat, eventos da Twitch e resposta visual/so
 
 ### TTS rewards
 
-To make a Twitch channel point reward speak the user message in the OBS overlay, configure the reward IDs in:
+Para fazer um reward da Twitch falar no overlay do OBS, configure:
 
 - `TWITCH_TTS_REWARD_IDS`
 - `TWITCH_TTS_REWARD_ID` (single reward ID fallback)
 - `TWITCH_TTS_LANG` (optional, defaults to `pt-BR`)
 
-When a configured reward is redeemed, the webhook adds `tts_text` to the event payload. The OBS webpage then uses the browser speech engine to read the message instead of playing an MP3/OGG file.
+Quando um reward configurado e resgatado:
 
-The text spoken by TTS is taken from the reward `user_input` field. If that field is empty, the overlay falls back to a short sentence built from the user name and reward title.
+1. O backend gera um arquivo de audio MP3 usando `gTTS`.
+2. O payload enviado para o overlay inclui `tts_audio_url`.
+3. O JavaScript do OBS toca esse arquivo (em vez de depender apenas do `speechSynthesis` local).
+
+O texto falado vem de `user_input`. Se vier vazio, o backend monta uma frase curta com `user_name` + reward title.
 
 For quick testing without Twitch, use:
 
@@ -63,6 +67,12 @@ For quick testing without Twitch, use:
 ```
 
 If `text` is omitted, the test endpoint keeps the legacy audio playback path.
+
+Observacoes:
+
+- Os arquivos TTS gerados ficam em `/mp3/tts-generated/`.
+- O backend remove arquivos antigos automaticamente para evitar crescimento infinito.
+- Se a geracao de audio falhar, o overlay ainda tenta o fallback via `speechSynthesis`.
 
 ### Como funciona a integracao com o chat
 

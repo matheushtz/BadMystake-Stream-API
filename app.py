@@ -6,9 +6,15 @@ import json
 import os
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from html import unescape
 from urllib import error, parse, request as urllib_request
+
+try:
+    from gtts import gTTS
+except Exception:
+    gTTS = None
 
 app = Flask(__name__)
 
@@ -17,6 +23,7 @@ FILE_PATH = os.path.join(BASE_DIR, "dados.json")
 STEAM_GAMES_FILE = os.path.join(BASE_DIR, "steam_games.json")
 OGG_DIR = os.path.join(BASE_DIR, "ogg")
 MP3_DIR = os.path.join(BASE_DIR, "mp3")
+GENERATED_TTS_DIR = os.path.join(MP3_DIR, "tts-generated")
 DEFAULT_DATA = {}
 DEFAULT_TTS_REWARD_IDENTIFIERS = {
     "965c119b-f6c7-4418-a407-dd6084e6c591",
@@ -24,6 +31,10 @@ DEFAULT_TTS_REWARD_IDENTIFIERS = {
 }
 
 APP_BOOT_TIME = int(os.times().elapsed)
+
+DEFAULT_BACKEND_TTS_LANG = "pt"
+MAX_TTS_FILE_AGE_SECONDS = 20 * 60
+MAX_TTS_FILE_COUNT = 200
 
 def send_file_no_cache(directory, filename):
     response = send_from_directory(directory, filename)
@@ -152,6 +163,111 @@ def build_tts_text(event_payload):
         parts.append(reward_title)
 
     return normalize_tts_text(" ".join(parts))
+
+def normalize_backend_tts_lang(tts_lang):
+    normalized = str(tts_lang or "").strip().lower()
+    if not normalized:
+        return DEFAULT_BACKEND_TTS_LANG
+
+    if normalized.startswith("pt"):
+        return "pt"
+
+    if "-" in normalized:
+        normalized = normalized.split("-", 1)[0]
+
+    if len(normalized) < 2:
+        return DEFAULT_BACKEND_TTS_LANG
+
+    return normalized
+
+def cleanup_generated_tts_files():
+    if not os.path.isdir(GENERATED_TTS_DIR):
+        return
+
+    now = time.time()
+    file_entries = []
+
+    for name in os.listdir(GENERATED_TTS_DIR):
+        if not name.lower().endswith(".mp3"):
+            continue
+
+        full_path = os.path.join(GENERATED_TTS_DIR, name)
+        if not os.path.isfile(full_path):
+            continue
+
+        try:
+            stat = os.stat(full_path)
+        except OSError:
+            continue
+
+        age_seconds = now - stat.st_mtime
+        if age_seconds > MAX_TTS_FILE_AGE_SECONDS:
+            try:
+                os.remove(full_path)
+            except OSError:
+                pass
+            continue
+
+        file_entries.append((stat.st_mtime, full_path))
+
+    if len(file_entries) <= MAX_TTS_FILE_COUNT:
+        return
+
+    file_entries.sort(key=lambda entry: entry[0])
+    extra_count = len(file_entries) - MAX_TTS_FILE_COUNT
+
+    for _, full_path in file_entries[:extra_count]:
+        try:
+            os.remove(full_path)
+        except OSError:
+            pass
+
+def generate_tts_audio_url(tts_text, tts_lang):
+    text = normalize_tts_text(tts_text)
+    if not text:
+        return ""
+
+    if gTTS is None:
+        print("[TTS] gTTS indisponivel. Adicione a dependencia no ambiente.", flush=True)
+        return ""
+
+    os.makedirs(GENERATED_TTS_DIR, exist_ok=True)
+    cleanup_generated_tts_files()
+
+    lang = normalize_backend_tts_lang(tts_lang)
+    filename = f"tts-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.mp3"
+    output_path = os.path.join(GENERATED_TTS_DIR, filename)
+
+    try:
+        gTTS(text=text, lang=lang).save(output_path)
+    except Exception as exc:
+        try:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+        except OSError:
+            pass
+
+        print(f"[TTS] Falha ao gerar audio ({lang}): {exc}", flush=True)
+        return ""
+
+    return f"/mp3/tts-generated/{filename}"
+
+def attach_backend_tts_audio(event_payload):
+    if not isinstance(event_payload, dict):
+        return
+
+    tts_text = normalize_tts_text(event_payload.get("tts_text", ""))
+    if not tts_text:
+        return
+
+    tts_lang = event_payload.get("tts_lang") or get_first_env("TWITCH_TTS_LANG") or "pt-BR"
+    event_payload["tts_text"] = tts_text
+    event_payload["tts_lang"] = tts_lang
+
+    tts_audio_url = generate_tts_audio_url(tts_text, tts_lang)
+    if tts_audio_url:
+        event_payload["tts_audio_url"] = tts_audio_url
+        event_payload["tts_engine"] = "gtts"
 
 def steam_target_steamid64():
     return get_first_env("STEAM_TARGET_STEAMID64")
@@ -488,6 +604,7 @@ def trigger_powerup_test(label="TESTE", tts_text=None):
     if tts_text:
         event_payload["tts_text"] = normalize_tts_text(tts_text)
         event_payload["tts_lang"] = get_first_env("TWITCH_TTS_LANG") or "pt-BR"
+        attach_backend_tts_audio(event_payload)
     else:
         event_payload["sound_file"] = "nossa.ogg"
 
@@ -1157,6 +1274,7 @@ def twitch_eventsub_webhook():
                 if tts_text:
                     event_payload["tts_text"] = tts_text
                     event_payload["tts_lang"] = get_first_env("TWITCH_TTS_LANG") or "pt-BR"
+                    attach_backend_tts_audio(event_payload)
 
             mark_powerup_trigger(event_payload)
             print(f"[TWITCH] Resgate processado id={reward_id} title={reward_title}", flush=True)

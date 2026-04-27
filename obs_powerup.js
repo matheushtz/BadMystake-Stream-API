@@ -1,7 +1,7 @@
 var audioCache = {};
 var DEFAULT_AUDIO_PATH = "/ogg/nossa.ogg";
 var DEFAULT_TTS_LANG = "pt-BR";
-var STRICT_PORTUGUESE_TTS = true;
+var STRICT_PORTUGUESE_TTS = false;
 var TTS_VOICES_TIMEOUT_MS = 1800;
 var ttsWarmupDone = false;
 var activeAudio = null;
@@ -142,6 +142,27 @@ function buildTtsText(pedido) {
     }
 
     return "";
+}
+
+function buildTtsAudioPath(pedido) {
+    if (!pedido || typeof pedido !== "object") {
+        return "";
+    }
+
+    var path = String(pedido.tts_audio_url || pedido.tts_audio_file || "").trim();
+    if (!path) {
+        return "";
+    }
+
+    if (path.indexOf("http://") === 0 || path.indexOf("https://") === 0) {
+        return path;
+    }
+
+    if (path.charAt(0) !== "/") {
+        return "/" + path;
+    }
+
+    return path;
 }
 
 function waitForTtsVoices(timeoutMs) {
@@ -359,6 +380,7 @@ async function tryPlayAudio() {
         console.log("[DEBUG] tryPlayAudio - tocando:", audioLabel);
         activeAudio.currentTime = 0;
         await activeAudio.play();
+        return true;
     } catch (err) {
         console.log("[OBS] Falha ao tocar audio, tentando recarregar:", err);
         try {
@@ -366,10 +388,46 @@ async function tryPlayAudio() {
             await sleepTime(100);
             activeAudio.currentTime = 0;
             await activeAudio.play();
+            return true;
         } catch (err2) {
             console.log("[OBS] Reproducao bloqueada:", err2);
+            return false;
         }
     }
+}
+
+function waitForAudioEnd(audio, maxWaitMs) {
+    return new Promise(function (resolve) {
+        if (!audio) {
+            resolve();
+            return;
+        }
+
+        var done = false;
+        var finish = function () {
+            if (done) {
+                return;
+            }
+
+            done = true;
+            audio.removeEventListener("ended", onEnd);
+            audio.removeEventListener("error", onError);
+            resolve();
+        };
+
+        var onEnd = function () {
+            finish();
+        };
+
+        var onError = function () {
+            finish();
+        };
+
+        audio.addEventListener("ended", onEnd);
+        audio.addEventListener("error", onError);
+
+        window.setTimeout(finish, maxWaitMs || 12000);
+    });
 }
 
 function setAudioSource(path) {
@@ -424,6 +482,18 @@ async function lista() {
     while (true) {
         if (listaPedidos.length > 0) {
             var pedido = listaPedidos.shift();
+            var ttsAudioPath = buildTtsAudioPath(pedido);
+
+            if (ttsAudioPath) {
+                console.log("[OBS][TTS] Tocando arquivo gerado:", ttsAudioPath);
+                setAudioSource(ttsAudioPath);
+                var audioPlayed = await tryPlayAudio();
+                if (audioPlayed) {
+                    await waitForAudioEnd(activeAudio, 45000);
+                }
+                continue;
+            }
+
             var ttsText = buildTtsText(pedido);
 
             if (ttsText) {
