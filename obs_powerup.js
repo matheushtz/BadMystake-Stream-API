@@ -1,7 +1,9 @@
 var audioCache = {};
 var DEFAULT_AUDIO_PATH = "/ogg/nossa.ogg";
 var DEFAULT_TTS_LANG = "pt-BR";
+var STRICT_PORTUGUESE_TTS = true;
 var TTS_VOICES_TIMEOUT_MS = 1800;
+var ttsWarmupDone = false;
 var activeAudio = null;
 var activeAudioPath = null;
 
@@ -186,6 +188,83 @@ function waitForTtsVoices(timeoutMs) {
     });
 }
 
+function pickTtsVoice(preferredLang) {
+    if (!window.speechSynthesis || typeof window.speechSynthesis.getVoices !== "function") {
+        return null;
+    }
+
+    var voices = window.speechSynthesis.getVoices() || [];
+    if (!Array.isArray(voices) || voices.length === 0) {
+        return null;
+    }
+
+    var wanted = normalizeId(preferredLang || DEFAULT_TTS_LANG);
+    var wantedPrefix = wanted.split("-")[0];
+    var preferredPortuguese = ["pt-br", "pt-pt", "pt"];
+    var wantsPortuguese = wantedPrefix === "pt";
+
+    for (var p = 0; p < preferredPortuguese.length; p++) {
+        for (var pv = 0; pv < voices.length; pv++) {
+            var ptVoiceLang = normalizeId(voices[pv].lang);
+            if (ptVoiceLang === preferredPortuguese[p] || ptVoiceLang.indexOf(preferredPortuguese[p] + "-") === 0) {
+                return voices[pv];
+            }
+        }
+    }
+
+    if (wantsPortuguese && STRICT_PORTUGUESE_TTS) {
+        return null;
+    }
+
+    for (var i = 0; i < voices.length; i++) {
+        if (normalizeId(voices[i].lang) === wanted) {
+            return voices[i];
+        }
+    }
+
+    for (var j = 0; j < voices.length; j++) {
+        var voiceLang = normalizeId(voices[j].lang);
+        if (voiceLang && voiceLang.indexOf(wantedPrefix) === 0) {
+            return voices[j];
+        }
+    }
+
+    for (var k = 0; k < voices.length; k++) {
+        if (voices[k].default) {
+            return voices[k];
+        }
+    }
+
+    return voices[0];
+}
+
+function warmupTtsEngine() {
+    if (ttsWarmupDone) {
+        return;
+    }
+
+    ttsWarmupDone = true;
+
+    if (!window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
+        console.log("[OBS][TTS] Speech API indisponível no warmup");
+        return;
+    }
+
+    waitForTtsVoices(TTS_VOICES_TIMEOUT_MS).then(function (hasVoices) {
+        if (!hasVoices) {
+            console.log("[OBS][TTS] Warmup sem vozes disponíveis");
+            return;
+        }
+
+        try {
+            var voices = window.speechSynthesis.getVoices() || [];
+            console.log("[OBS][TTS] Warmup ok. Vozes disponíveis:", voices.length);
+        } catch (error) {
+            console.log("[OBS][TTS] Falha ao listar vozes no warmup:", error);
+        }
+    });
+}
+
 function speakText(text, lang) {
     return new Promise(function (resolve) {
         if (!window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
@@ -200,7 +279,25 @@ function speakText(text, lang) {
             }
 
             var utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = lang || DEFAULT_TTS_LANG;
+            var requestedLang = lang || DEFAULT_TTS_LANG;
+            var requestedPrefix = normalizeId(requestedLang).split("-")[0];
+            var selectedVoice = pickTtsVoice(requestedLang);
+
+            if (!selectedVoice && requestedPrefix === "pt" && STRICT_PORTUGUESE_TTS) {
+                console.log("[OBS][TTS] Nenhuma voz em portugues disponivel. Instale uma voz PT-BR no Windows.");
+                resolve(false);
+                return;
+            }
+
+            if (selectedVoice) {
+                utterance.voice = selectedVoice;
+                utterance.lang = selectedVoice.lang || requestedLang;
+                console.log("[OBS][TTS] Voz selecionada:", selectedVoice.name || "<sem nome>", "lang=", utterance.lang);
+            } else {
+                utterance.lang = requestedLang;
+                console.log("[OBS][TTS] Sem voz selecionada, usando lang:", utterance.lang);
+            }
+
             utterance.rate = 1;
             utterance.pitch = 1;
             utterance.volume = 1;
@@ -358,6 +455,7 @@ async function lista() {
 }
 
 function iniciar() {
+    warmupTtsEngine();
     setInterval(pollState, pollIntervalMs);
     pollState();
     lista();
