@@ -50,7 +50,7 @@ Para fazer um reward da Twitch falar no overlay do OBS, configure:
 
 - `TWITCH_TTS_REWARD_IDS`
 - `TWITCH_TTS_REWARD_ID` (single reward ID fallback)
-- `TWITCH_TTS_LANG` (optional, defaults to `pt-BR`)
+- `TWITCH_TTS_LANG` (opcional, padrao `pt-BR`)
 
 Quando um reward configurado e resgatado:
 
@@ -60,19 +60,20 @@ Quando um reward configurado e resgatado:
 
 O texto falado vem de `user_input`. Se vier vazio, o backend monta uma frase curta com `user_name` + reward title.
 
-For quick testing without Twitch, use:
+Teste rapido sem Twitch:
 
 ```bash
 /twitch/powerup/test?text=Mensagem+de+teste
 ```
 
-If `text` is omitted, the test endpoint keeps the legacy audio playback path.
+Se `text` for omitido, o teste segue o caminho legado de audio (`nossa.ogg`).
 
 Observacoes:
 
 - Os arquivos TTS gerados ficam em `/mp3/tts-generated/`.
 - O backend remove arquivos antigos automaticamente para evitar crescimento infinito.
 - Se a geracao de audio falhar, o overlay ainda tenta o fallback via `speechSynthesis`.
+- O `gTTS` depende de acesso a internet para gerar os arquivos.
 
 ### Como funciona a integracao com o chat
 
@@ -102,7 +103,11 @@ O fluxo foi desenhado para ser simples de operar na live:
 	- Audio tocado quando houver novo trigger do power-up na stream
 
 - `GET /mp3/<arquivo>.mp3`
-	- Arquivos novos usados pelos rewards mapeados no overlay
+	- Arquivos MP3 estaticos e TTS gerado (`/mp3/tts-generated/...`)
+
+- `GET|POST /twitch/powerup/test`
+	- Endpoint de teste manual para disparar power-up
+	- Com `?text=...` gera TTS em arquivo e envia para o overlay
 
 ### Endpoint Steam
 
@@ -132,9 +137,10 @@ Isso permite manter o historico por jogo e usar a mesma base para futuras expans
 ### Como usar no OBS (estado atual)
 
 1. Adicione uma Browser Source apontando para `https://seu-servico.onrender.com/obs/powerup`.
-2. Garanta que os arquivos de audio existam nas pastas `ogg/` e `mp3/` conforme o mapeamento do JavaScript.
+2. Habilite `Control audio via OBS` na Browser Source para garantir saida no mixer.
 3. Dispare a criacao da assinatura em `/twitch/eventsub/subscribe`.
-4. Ao ocorrer um novo resgate na Twitch, a pagina deve tocar o audio.
+4. Teste manual com `/twitch/powerup/test?text=Mensagem+de+teste`.
+5. Ao ocorrer um novo resgate na Twitch, a pagina deve tocar o MP3 gerado para TTS (ou audio mapeado quando nao for TTS).
 
 ## Arquivos principais
 
