@@ -109,6 +109,82 @@ O fluxo foi desenhado para ser simples de operar na live:
 	- Endpoint de teste manual para disparar power-up
 	- Com `?text=...` gera TTS em arquivo e envia para o overlay
 
+### Roleta de Torchlight
+
+Novo overlay para Torchlight com roleta interativa que gira quando um reward específico é resgatado na Twitch.
+
+#### Fluxo de execução
+
+1. Usuario resgata o reward "Roleta de FE (Torchlight)" na Twitch.
+2. A Twitch envia o evento para o webhook em `/twitch/eventsub`.
+3. O backend atualiza `POWERUP_EVENT_STATE` com `seq`, `last_reward` e `last_event`.
+4. A pagina OBS em `/torchlight/roleta/obs` faz polling a cada 1 segundo em `/twitch/powerup/state`.
+5. Ao detectar mudanca no `seq`, a pagina identifica que é um novo evento.
+6. A roleta gira por 4 segundos com animacao suave (cubic easeOut).
+7. Ao final da animacao, o centro exibe o valor sorteado (100, 200, 300, 400, 500 ou 1000).
+8. A roleta fica visivel por 30 segundos e desaparece automaticamente.
+
+#### Configuração do reward
+
+No painel de Creator Dashboard da Twitch, crie um reward customizado com:
+
+- **Titulo**: `Roleta de FE (Torchlight)`
+- **ID do reward**: `28bce937-6821-426c-a186-713398767e9c` (ou outro, configuravel)
+- **Custo**: à sua escolha (recomendado 1000-5000 pontos)
+- **Imagem**: opcional, logo de Torchlight
+
+#### Endpoints da roleta
+
+- `GET /torchlight/roleta/obs`
+	- Retorna a pagina HTML com estrutura da roleta (pointer, wheel, labels, center display)
+
+- `GET /torchlight/roleta/obs.js`
+	- JavaScript com logica de polling, animacao, som e matching de valores
+
+- `GET /torchlight/roleta/obs.css`
+	- CSS com estilo do wheel (conic-gradient), labels posicionadas via trigonometria, pointer (triangulo vermelho no topo)
+
+- `GET /twitch/powerup/state`
+	- Retorna JSON com `seq` (contador de atualizacoes), `last_reward` (ID do ultimo reward) e `last_event` (timestamp)
+	- Exemplo: `{"seq": 42, "last_reward": "28bce937...", "last_event": 1704067200}`
+
+- `GET|POST /twitch/powerup/test`
+	- Testa manualmente o trigger da roleta sem precisar resgatar o reward na Twitch
+	- Parametros opcionais:
+		- `?label=Roleta%20de%20FE%20%28Torchlight%29` - filtra por titulo do reward (case-insensitive)
+		- `?id=28bce937-6821-426c-a186-713398767e9c` - filtra por ID do reward
+	- Exemplo: `http://localhost:5000/twitch/powerup/test?label=Roleta%20de%20FE`
+
+#### Características da roleta
+
+- **Valores**: 6 fatias com numeros [100, 200, 300, 400, 500, 1000]
+- **Peso**: O valor 1000 tem probabilidade menor (0.33 vs 1.0 dos outros), gerando uma fatia menor
+- **Cores**: Cada fatia tem cor distinta (vermelho, azul, verde, amarelo, roxo, laranja)
+- **Animacao**: Gira 6+ voltas completas + angulo aleatorio extra, desacelerando suavemente
+- **Som**: Tom de 1kHz tocado durante a rotacao a cada 10 graus
+- **Precision**: O valor exato apontado pelo triangulo vermelho (topo) e calculado usando trigonometria e conic-gradient com `from -90deg`
+
+#### Como usar no OBS
+
+1. Crie uma Browser Source e aponte para `https://seu-servico.onrender.com/torchlight/roleta/obs`.
+2. Configure as dimensoes: largura e altura `420px` (quadrado para o wheel).
+3. Habilite `Atualizar pagina quando cena fica inativa` para evitar cache.
+4. Coloque a source em uma cena dedicada ou sobreposição da cena de Torchlight.
+5. A roleta ficara invisivel ate que o reward seja resgatado.
+6. Para testar sem resgatar, chame: `curl http://localhost:5000/twitch/powerup/test?label=Roleta%20de%20FE%20%28Torchlight%29`
+
+#### Personalizacao
+
+Dentro da pagina HTML (`/torchlight/roleta/obs`), o atributo `data-default-reward` define qual reward ativa a roleta:
+
+```html
+<div id="wrapper" data-default-reward="28bce937-6821-426c-a186-713398767e9c,Roleta de FE (Torchlight)">
+```
+
+Pode-se filtrar por ID, titulo ou ambos (separados por virgula). A filtragem e case-insensitive.
+
+Se necessario, pode-se passar `?reward=ID` ou `?label=TITULO` como query string na URL da Browser Source para sobrescrever.
+
 ### Endpoint Steam
 
 - `GET /steam/achievements/`

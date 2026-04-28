@@ -38,22 +38,23 @@
     current = end;
   });
 
-  wheel.style.background = `conic-gradient(${gradientParts.join(',')})`;
+  wheel.style.background = `conic-gradient(from -90deg, ${gradientParts.join(',')})`;
   console.log('[ROLETA] Gradiente aplicado, slices:', slices.length);
 
   function layoutLabels() {
-    const rect = wheel.getBoundingClientRect();
-    if (!rect.width || !rect.height) {
+    const width = wheel.clientWidth;
+    const height = wheel.clientHeight;
+    if (!width || !height) {
       return;
     }
 
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
-    const labelRadius = Math.min(rect.width, rect.height) * 0.37;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const labelRadius = Math.min(width, height) * 0.37;
 
     labelsContainer.querySelectorAll('.label').forEach(function(label, index) {
       const slice = slices[index];
-      const angleRad = ((slice.mid - 90) * Math.PI) / 180;
+      const angleRad = ((slice.mid - 180) * Math.PI) / 180;
       const x = centerX + labelRadius * Math.cos(angleRad);
       const y = centerY + labelRadius * Math.sin(angleRad);
 
@@ -107,7 +108,7 @@
 
       wheel.style.transform = `rotate(${currentRot}deg)`;
 
-      const pointerAngle = (270 - currentRot) % 360;
+      const pointerAngle = (450 - currentRot) % 360;
       const normalizedPointer = pointerAngle < 0 ? pointerAngle + 360 : pointerAngle;
       const slice = slices.find(function(s) {
         return normalizedPointer >= s.start && normalizedPointer < s.end;
@@ -136,7 +137,7 @@
 
   let lastSeq = 0;
   const POLL_MS = 1000;
-  const VISIBILITY_MS = 60000;
+  const VISIBILITY_MS = 30000;
   let hideTimer = null;
 
   function getParam(name) {
@@ -173,9 +174,23 @@
     });
   }
 
+  function updateCenterDisplay() {
+    const pointerAngle = (450 - rotation) % 360;
+    const normalizedPointer = pointerAngle < 0 ? pointerAngle + 360 : pointerAngle;
+    const slice = slices.find(function(s) {
+      return normalizedPointer >= s.start && normalizedPointer < s.end;
+    }) || slices[slices.length - 1];
+
+    if (slice) {
+      center.innerHTML = `${slice.value}<br>FE`;
+    }
+  }
+
   function showWheel(event) {
     console.log('[ROLETA] showWheel chamado', event);
     wrapper.style.display = 'block';
+    updateCenterDisplay();
+    layoutLabels();
     requestAnimationFrame(layoutLabels);
     spin();
 
