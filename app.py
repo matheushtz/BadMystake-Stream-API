@@ -1336,6 +1336,18 @@ def obs_powerup_script():
 def obs_powerup_styles():
     return send_file_no_cache(BASE_DIR, "obs_powerup.css")
 
+# Webpage para OBS: roleta/torchlight
+@app.route("/torchlight/roleta/obs", methods=["GET"])
+def obs_roleta_page():
+    return send_file_no_cache(BASE_DIR, "torchlight_roleta_obs.html")
+
+@app.route("/torchlight/roleta/obs.js", methods=["GET"])
+def obs_roleta_script():
+    return send_file_no_cache(BASE_DIR, "torchlight_roleta_obs.js")
+
+@app.route("/torchlight/roleta/obs.css", methods=["GET"])
+def obs_roleta_styles():
+    return send_file_no_cache(BASE_DIR, "torchlight_roleta_obs.css")
 # Arquivo de audio para a webpage do OBS.
 @app.route("/obs/nossa.mp3", methods=["GET"])
 def obs_powerup_audio():
