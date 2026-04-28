@@ -12,8 +12,8 @@
     return;
   }
 
-  const values = [100, 200, 300, 400, 500, 1000];
-  const weights = [1, 1, 1, 1, 1, 0.33];
+  const values = [10, 25, 40, 65, 100, 300];
+  const weights = [22.25, 22.25, 22.25, 22.25, 8, 3];
   const colors = ['#ff4d4d', '#4da6ff', '#4dff88', '#ffd24d', '#b84dff', '#ff944d'];
   const total = weights.reduce((a, b) => a + b, 0);
 
