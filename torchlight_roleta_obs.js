@@ -1,8 +1,18 @@
 // Roleta OBS -- nova versão com gradiente cônico e polling do servidor
 (function(){
+  console.log('[ROLETA] Inicializando...');
+  
   const wheel = document.getElementById("wheel");
   const labelsContainer = document.getElementById("labels");
   const center = document.getElementById("center");
+  const wrapper = document.getElementById("wrapper");
+  
+  if (!wheel || !labelsContainer || !center || !wrapper) {
+    console.error('[ROLETA] Elementos não encontrados', {wheel, labelsContainer, center, wrapper});
+    return;
+  }
+  
+  console.log('[ROLETA] Elementos encontrados');
   
   // configuração de valores, pesos e cores
   const values = [100, 200, 300, 400, 500, 1000];
@@ -52,6 +62,7 @@
   });
   
   wheel.style.background = `conic-gradient(${gradientParts.join(",")})`;
+  console.log('[ROLETA] Gradiente aplicado, slices:', slices.length);
   
   // ===== animação =====
   let rotation = 0;
@@ -80,6 +91,7 @@
   function spin() {
     if (isSpinning) return;
     isSpinning = true;
+    console.log('[ROLETA] Iniciando spin...');
     
     const spins = 6 * 360;
     const extra = Math.random() * 360;
@@ -119,6 +131,7 @@
       } else {
         rotation += totalSpin;
         isSpinning = false;
+        console.log('[ROLETA] Spin finalizado');
       }
     }
     
@@ -141,11 +154,8 @@
   let rawFilter = (getParam('reward')||'').trim();
   if(!rawFilter){
     try{
-      const wrapper = document.getElementById('wrapper');
-      if(wrapper) {
-        const def = wrapper.getAttribute('data-default-reward');
-        if(def) rawFilter = def.trim();
-      }
+      const def = wrapper.getAttribute('data-default-reward');
+      if(def) rawFilter = def.trim();
     }catch(e){}
   }
   
@@ -157,14 +167,18 @@
     });
   }
   
+  console.log('[ROLETA] Filtro configurado:', rewardFilter);
+  
   function matchesFilter(event){
     if(!rewardFilter || rewardFilter.length===0) return true;
     const r = (event && event.reward) ? event.reward : {};
     const id = (r.id||'').toString().toLowerCase();
     const title = (r.title||'').toString().toLowerCase();
+    
     for(let i=0;i<rewardFilter.length;i++){
       const f = rewardFilter[i].toLowerCase();
       if(!f) continue;
+      // match by id or title
       if(f.length >= 8 && /[a-z0-9\-]/i.test(f)){
         if(id === f || id.indexOf(f) !== -1) return true;
       }
@@ -174,14 +188,13 @@
   }
   
   function showWheel(event){
-    const wrapper = document.getElementById('wrapper');
-    if(!wrapper) return;
-    
+    console.log('[ROLETA] showWheel chamado', event);
     wrapper.style.display = 'block';
     spin();
     
     if(hideTimer) clearTimeout(hideTimer);
     hideTimer = setTimeout(function(){
+      console.log('[ROLETA] Ocultando roleta após timeout');
       wrapper.style.display = 'none';
     }, VISIBILITY_MS);
   }
@@ -190,17 +203,32 @@
     fetch('/twitch/powerup/state', {cache:'no-store'})
       .then(function(r){ return r.json(); })
       .then(function(j){
-        if(!j || typeof j.seq === 'undefined') return;
+        if(!j || typeof j.seq === 'undefined') {
+          console.log('[ROLETA] Poll: resposta inválida', j);
+          return;
+        }
+        console.log('[ROLETA] Poll: seq recebido:', j.seq, 'lastSeq:', lastSeq);
+        
         if(j.seq !== lastSeq){
           lastSeq = j.seq;
           const evt = j.last_event || j;
-          if(!matchesFilter(evt)) return;
+          console.log('[ROLETA] Novo evento:', evt);
+          
+          if(!matchesFilter(evt)) {
+            console.log('[ROLETA] Evento não corresponde ao filtro');
+            return;
+          }
+          
+          console.log('[ROLETA] Evento corresponde! Mostrando roleta');
           showWheel(evt);
         }
       })
-      .catch(function(e){ console.log('roleta poll error', e); });
+      .catch(function(e){ 
+        console.error('[ROLETA] Poll error:', e); 
+      });
   }
   
+  console.log('[ROLETA] Iniciando polling a cada', POLL_MS, 'ms');
   setInterval(poll, POLL_MS);
   poll();
 })();
