@@ -1,76 +1,73 @@
-// Roleta OBS -- nova versão com gradiente cônico e polling do servidor
+﻿// Roleta OBS -- nova versão com gradiente cônico e polling do servidor
 (function(){
   console.log('[ROLETA] Inicializando...');
-  
-  const wheel = document.getElementById("wheel");
-  const labelsContainer = document.getElementById("labels");
-  const center = document.getElementById("center");
-  const wrapper = document.getElementById("wrapper");
-  
+
+  const wheel = document.getElementById('wheel');
+  const labelsContainer = document.getElementById('labels');
+  const center = document.getElementById('center');
+  const wrapper = document.getElementById('wrapper');
+
   if (!wheel || !labelsContainer || !center || !wrapper) {
-    console.error('[ROLETA] Elementos não encontrados', {wheel, labelsContainer, center, wrapper});
+    console.error('[ROLETA] Elementos não encontrados', { wheel, labelsContainer, center, wrapper });
     return;
   }
-  
-  console.log('[ROLETA] Elementos encontrados');
-  
-  // configuração de valores, pesos e cores
+
   const values = [100, 200, 300, 400, 500, 1000];
   const weights = [1, 1, 1, 1, 1, 0.33];
-  const colors = [
-    "#ff4d4d",
-    "#4da6ff",
-    "#4dff88",
-    "#ffd24d",
-    "#b84dff",
-    "#ff944d"
-  ];
-  
+  const colors = ['#ff4d4d', '#4da6ff', '#4dff88', '#ffd24d', '#b84dff', '#ff944d'];
   const total = weights.reduce((a, b) => a + b, 0);
-  
+
+  const slices = [];
+  const gradientParts = [];
   let current = 0;
-  let slices = [];
-  let gradientParts = [];
-  
-  // construir gradiente e slices
-  weights.forEach((w, i) => {
-    let angle = (w / total) * 360;
-    let start = current;
-    let end = current + angle;
-    
-    gradientParts.push(`${colors[i]} ${start}deg ${end}deg`);
-    slices.push({ start, end, value: values[i] });
-    
-    let mid = (start + end) / 2;
-    const label = document.createElement("div");
-    label.className = "label";
-    label.innerText = values[i];
-    
-    let correctedAngle = mid;
-    if (mid > 90 && mid < 270) {
-      correctedAngle = mid + 180;
-    }
-    
-    label.style.transform = `
-      rotate(${mid}deg)
-      translate(0, -140px)
-      rotate(${-correctedAngle}deg)
-    `;
-    
+
+  weights.forEach((weight, index) => {
+    const angle = (weight / total) * 360;
+    const start = current;
+    const end = current + angle;
+    const mid = (start + end) / 2;
+
+    gradientParts.push(`${colors[index]} ${start}deg ${end}deg`);
+    slices.push({ start, end, mid, value: values[index] });
+
+    const label = document.createElement('div');
+    label.className = 'label';
+    label.textContent = values[index];
     labelsContainer.appendChild(label);
+
     current = end;
   });
-  
-  wheel.style.background = `conic-gradient(${gradientParts.join(",")})`;
+
+  wheel.style.background = `conic-gradient(${gradientParts.join(',')})`;
   console.log('[ROLETA] Gradiente aplicado, slices:', slices.length);
-  
-  // ===== animação =====
+
+  function layoutLabels() {
+    const rect = wheel.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      return;
+    }
+
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+    const labelRadius = Math.min(rect.width, rect.height) * 0.37;
+
+    labelsContainer.querySelectorAll('.label').forEach(function(label, index) {
+      const slice = slices[index];
+      const angleRad = ((slice.mid - 90) * Math.PI) / 180;
+      const x = centerX + labelRadius * Math.cos(angleRad);
+      const y = centerY + labelRadius * Math.sin(angleRad);
+
+      label.style.left = `${x}px`;
+      label.style.top = `${y}px`;
+      label.style.transform = 'translate(-50%, -50%)';
+    });
+  }
+
   let rotation = 0;
   let lastTick = 0;
   let isSpinning = false;
-  
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  
+
   function tick() {
     try {
       const osc = audioCtx.createOscillator();
@@ -78,54 +75,53 @@
       osc.connect(gain);
       gain.connect(audioCtx.destination);
       osc.frequency.value = 1000;
-      gain.gain.value = 0.1;
+      gain.gain.value = 0.02;
       osc.start();
       osc.stop(audioCtx.currentTime + 0.02);
     } catch (e) {}
   }
-  
+
   function easeOut(t) {
     return 1 - Math.pow(1 - t, 3);
   }
-  
+
   function spin() {
     if (isSpinning) return;
     isSpinning = true;
-    console.log('[ROLETA] Iniciando spin...');
-    
+
     const spins = 6 * 360;
     const extra = Math.random() * 360;
     const totalSpin = spins + extra;
-    
+
     const duration = 4000;
     let start = null;
-    
+
     function animate(ts) {
       if (!start) start = ts;
-      
+
       let p = (ts - start) / duration;
       if (p > 1) p = 1;
-      
-      let eased = easeOut(p);
-      let currentRot = rotation + totalSpin * eased;
-      
+
+      const eased = easeOut(p);
+      const currentRot = rotation + totalSpin * eased;
+
       wheel.style.transform = `rotate(${currentRot}deg)`;
-      
-      let normalized = (currentRot % 360 + 360) % 360;
-      
-      let slice = slices.find(s =>
-        normalized >= s.start && normalized < s.end
-      );
-      
+
+      const pointerAngle = (270 - currentRot) % 360;
+      const normalizedPointer = pointerAngle < 0 ? pointerAngle + 360 : pointerAngle;
+      const slice = slices.find(function(s) {
+        return normalizedPointer >= s.start && normalizedPointer < s.end;
+      }) || slices[slices.length - 1];
+
       if (slice) {
-        center.innerText = slice.value + "\nFE";
+        center.innerHTML = `${slice.value}<br>FE`;
       }
-      
+
       if (Math.floor(currentRot / 10) !== Math.floor(lastTick / 10)) {
         tick();
         lastTick = currentRot;
       }
-      
+
       if (p < 1) {
         requestAnimationFrame(animate);
       } else {
@@ -134,102 +130,80 @@
         console.log('[ROLETA] Spin finalizado');
       }
     }
-    
+
     requestAnimationFrame(animate);
   }
-  
-  // ===== polling do servidor =====
+
   let lastSeq = 0;
   const POLL_MS = 1000;
-  const VISIBILITY_MS = 60000; // 1 minuto
+  const VISIBILITY_MS = 60000;
   let hideTimer = null;
-  
-  function getParam(name){
-    try{
-      const params = new URLSearchParams(window.location.search);
-      return params.get(name);
-    }catch(e){return null}
+
+  function getParam(name) {
+    try {
+      return new URLSearchParams(window.location.search).get(name);
+    } catch (e) {
+      return null;
+    }
   }
-  
-  let rawFilter = (getParam('reward')||'').trim();
-  if(!rawFilter){
-    try{
-      const def = wrapper.getAttribute('data-default-reward');
-      if(def) rawFilter = def.trim();
-    }catch(e){}
+
+  let rawFilter = (getParam('reward') || '').trim();
+  if (!rawFilter) {
+    rawFilter = (wrapper.getAttribute('data-default-reward') || '').trim();
   }
-  
-  const rewardFilter = [];
-  if(rawFilter){
-    rawFilter.split(',').forEach(function(s){ 
-      const trimmed = s.trim();
-      if(trimmed) rewardFilter.push(trimmed);
+
+  const rewardFilter = rawFilter
+    ? rawFilter.split(',').map(function(s) { return s.trim(); }).filter(Boolean)
+    : [];
+
+  function matchesFilter(event) {
+    if (!rewardFilter.length) return true;
+
+    const reward = event && event.reward ? event.reward : {};
+    const id = String(reward.id || '').toLowerCase();
+    const title = String(reward.title || '').toLowerCase();
+
+    return rewardFilter.some(function(filter) {
+      const normalized = filter.toLowerCase();
+      if (!normalized) return false;
+      if (normalized.length >= 8 && /[a-z0-9\-]/i.test(normalized)) {
+        if (id === normalized || id.indexOf(normalized) !== -1) return true;
+      }
+      return title.indexOf(normalized) !== -1;
     });
   }
-  
-  console.log('[ROLETA] Filtro configurado:', rewardFilter);
-  
-  function matchesFilter(event){
-    if(!rewardFilter || rewardFilter.length===0) return true;
-    const r = (event && event.reward) ? event.reward : {};
-    const id = (r.id||'').toString().toLowerCase();
-    const title = (r.title||'').toString().toLowerCase();
-    
-    for(let i=0;i<rewardFilter.length;i++){
-      const f = rewardFilter[i].toLowerCase();
-      if(!f) continue;
-      // match by id or title
-      if(f.length >= 8 && /[a-z0-9\-]/i.test(f)){
-        if(id === f || id.indexOf(f) !== -1) return true;
-      }
-      if(title.indexOf(f) !== -1) return true;
-    }
-    return false;
-  }
-  
-  function showWheel(event){
+
+  function showWheel(event) {
     console.log('[ROLETA] showWheel chamado', event);
     wrapper.style.display = 'block';
+    requestAnimationFrame(layoutLabels);
     spin();
-    
-    if(hideTimer) clearTimeout(hideTimer);
-    hideTimer = setTimeout(function(){
-      console.log('[ROLETA] Ocultando roleta após timeout');
+
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(function() {
       wrapper.style.display = 'none';
     }, VISIBILITY_MS);
   }
-  
-  function poll(){
-    fetch('/twitch/powerup/state', {cache:'no-store'})
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        if(!j || typeof j.seq === 'undefined') {
-          console.log('[ROLETA] Poll: resposta inválida', j);
-          return;
-        }
-        console.log('[ROLETA] Poll: seq recebido:', j.seq, 'lastSeq:', lastSeq);
-        
-        if(j.seq !== lastSeq){
-          lastSeq = j.seq;
-          const evt = j.last_event || j;
-          console.log('[ROLETA] Novo evento:', evt);
-          
-          if(!matchesFilter(evt)) {
-            console.log('[ROLETA] Evento não corresponde ao filtro');
-            return;
-          }
-          
-          console.log('[ROLETA] Evento corresponde! Mostrando roleta');
-          showWheel(evt);
+
+  function poll() {
+    fetch('/twitch/powerup/state', { cache: 'no-store' })
+      .then(function(response) { return response.json(); })
+      .then(function(payload) {
+        if (!payload || typeof payload.seq === 'undefined') return;
+        if (payload.seq !== lastSeq) {
+          lastSeq = payload.seq;
+          const event = payload.last_event || payload;
+          if (!matchesFilter(event)) return;
+          showWheel(event);
         }
       })
-      .catch(function(e){ 
-        console.error('[ROLETA] Poll error:', e); 
+      .catch(function(error) {
+        console.error('[ROLETA] Poll error:', error);
       });
   }
-  
-  console.log('[ROLETA] Iniciando polling a cada', POLL_MS, 'ms');
+
+  window.addEventListener('resize', layoutLabels);
+  setTimeout(layoutLabels, 0);
   setInterval(poll, POLL_MS);
   poll();
 })();
-
