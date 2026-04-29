@@ -158,7 +158,7 @@ No painel de Creator Dashboard da Twitch, crie um reward customizado com:
 #### Características da roleta
 
 - **Valores**: 6 fatias com numeros [20, 30, 50, 75, 100, 300]
-- **Peso**: O valor 300 tem probabilidade menor (0.33 vs 1.0 dos outros), gerando uma fatia menor
+- **Peso**: Distribuicao em porcentagem 22% / 22% / 22% / 22% / 8% / 4%, mantendo a fatia de 300 menor
 - **Cores**: Cada fatia tem cor distinta (vermelho, azul, verde, amarelo, roxo, laranja)
 - **Animacao**: Gira 6+ voltas completas + angulo aleatorio extra, desacelerando suavemente
 - **Som**: Tom de 1kHz tocado durante a rotacao a cada 10 graus
