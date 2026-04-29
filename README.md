@@ -121,7 +121,7 @@ Novo overlay para Torchlight com roleta interativa que gira quando um reward esp
 4. A pagina OBS em `/torchlight/roleta/obs` faz polling a cada 1 segundo em `/twitch/powerup/state`.
 5. Ao detectar mudanca no `seq`, a pagina identifica que é um novo evento.
 6. A roleta gira por 4 segundos com animacao suave (cubic easeOut).
-7. Ao final da animacao, o centro exibe o valor sorteado (100, 200, 300, 400, 500 ou 1000).
+7. Ao final da animacao, o centro exibe o valor sorteado (20, 30, 50, 75, 100 ou 300).
 8. A roleta fica visivel por 30 segundos e desaparece automaticamente.
 
 #### Configuração do reward
@@ -157,8 +157,8 @@ No painel de Creator Dashboard da Twitch, crie um reward customizado com:
 
 #### Características da roleta
 
-- **Valores**: 6 fatias com numeros [100, 200, 300, 400, 500, 1000]
-- **Peso**: O valor 1000 tem probabilidade menor (0.33 vs 1.0 dos outros), gerando uma fatia menor
+- **Valores**: 6 fatias com numeros [20, 30, 50, 75, 100, 300]
+- **Peso**: O valor 300 tem probabilidade menor (0.33 vs 1.0 dos outros), gerando uma fatia menor
 - **Cores**: Cada fatia tem cor distinta (vermelho, azul, verde, amarelo, roxo, laranja)
 - **Animacao**: Gira 6+ voltas completas + angulo aleatorio extra, desacelerando suavemente
 - **Som**: Tom de 1kHz tocado durante a rotacao a cada 10 graus
