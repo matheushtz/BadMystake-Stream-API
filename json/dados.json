@@ -9,9 +9,12 @@
     "mortes": 1
   },
   "torchlight-infinite": {
-    "mortes": 2225
+    "mortes": 2235
   },
   "league-of-legends": {
+    "mortes": 1
+  },
+  "pragmata": {
     "mortes": 1
   }
 }
