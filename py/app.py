@@ -302,28 +302,38 @@ def generate_tts_audio(tts_text, tts_lang):
     if not text:
         return "", ""
 
-    model_path, config_path = pick_random_piper_voice_pair()
-    if get_piper_voice_class() is not None and model_path and config_path:
+    piper_pairs = get_piper_voice_pairs()
+    random.shuffle(piper_pairs)
+
+    if get_piper_voice_class() is not None and piper_pairs:
         os.makedirs(GENERATED_TTS_DIR, exist_ok=True)
         cleanup_generated_tts_files()
 
         filename = f"tts-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.wav"
         output_path = os.path.join(GENERATED_TTS_DIR, filename)
 
-        try:
-            voice = load_piper_voice(model_path, config_path)
-            with wave.open(output_path, "wb") as wav_file:
-                voice.synthesize(text, wav_file)
-            print(f"[TTS] Piper selecionado: {os.path.basename(model_path)}", flush=True)
-            return f"/mp3/tts-generated/{filename}", "piper"
-        except Exception as exc:
+        for model_path, config_path in piper_pairs:
             try:
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-            except OSError:
-                pass
+                voice = load_piper_voice(model_path, config_path)
+                with wave.open(output_path, "wb") as wav_file:
+                    sample_rate = getattr(getattr(voice, "config", None), "sample_rate", 22050)
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(int(sample_rate) if sample_rate else 22050)
+                    voice.synthesize(text, wav_file)
 
-            print(f"[TTS] Falha ao gerar audio com Piper ({model_path}): {exc}", flush=True)
+                print(f"[TTS] Piper selecionado: {os.path.basename(model_path)}", flush=True)
+                return f"/mp3/tts-generated/{filename}", "piper"
+            except Exception as exc:
+                try:
+                    if os.path.exists(output_path):
+                        os.remove(output_path)
+                except OSError:
+                    pass
+
+                print(f"[TTS] Falha ao gerar audio com Piper ({model_path}): {exc}", flush=True)
+
+        print("[TTS] Nenhum par modelo/json do Piper conseguiu sintetizar audio.", flush=True)
 
     gtts_class = get_gtts_class()
     if gtts_class is None:
