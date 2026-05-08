@@ -297,6 +297,34 @@ def cleanup_generated_tts_files():
         except OSError:
             pass
 
+def validate_generated_wav_file(wav_path):
+    try:
+        if not os.path.isfile(wav_path):
+            return False, "arquivo ausente"
+
+        file_size = os.path.getsize(wav_path)
+        if file_size <= 44:
+            return False, f"arquivo muito pequeno ({file_size} bytes)"
+
+        with wave.open(wav_path, "rb") as wav_file:
+            channels = wav_file.getnchannels()
+            sample_width = wav_file.getsampwidth()
+            frame_rate = wav_file.getframerate()
+            frame_count = wav_file.getnframes()
+
+        if channels <= 0:
+            return False, "nchannels invalido"
+        if sample_width <= 0:
+            return False, "sampwidth invalido"
+        if frame_rate <= 0:
+            return False, "framerate invalido"
+        if frame_count <= 0:
+            return False, "nframes invalido"
+
+        return True, "ok"
+    except Exception as exc:
+        return False, f"falha ao validar wav: {exc}"
+
 def generate_tts_audio(tts_text, tts_lang):
     text = normalize_tts_text(tts_text)
     if not text:
@@ -321,6 +349,10 @@ def generate_tts_audio(tts_text, tts_lang):
                     wav_file.setsampwidth(2)
                     wav_file.setframerate(int(sample_rate) if sample_rate else 22050)
                     voice.synthesize(text, wav_file)
+
+                wav_ok, wav_reason = validate_generated_wav_file(output_path)
+                if not wav_ok:
+                    raise RuntimeError(f"wav invalido: {wav_reason}")
 
                 print(f"[TTS] Piper selecionado: {os.path.basename(model_path)}", flush=True)
                 return f"/mp3/tts-generated/{filename}", "piper"

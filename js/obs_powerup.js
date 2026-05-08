@@ -72,6 +72,12 @@ function getAudioByPath(path) {
         var audio = new Audio(normalizedPath);
         audio.volume = AUDIO_VOLUME_MAP[normalizedPath] !== undefined ? AUDIO_VOLUME_MAP[normalizedPath] : 1;
         audio.preload = "auto";
+        audio.addEventListener("error", function () {
+            var mediaError = audio.error;
+            var code = mediaError && mediaError.code ? mediaError.code : "n/a";
+            var message = mediaError && mediaError.message ? mediaError.message : "sem mensagem";
+            console.log("[OBS][AUDIO] Erro de decodificacao/reproducao:", normalizedPath, "code=", code, "msg=", message);
+        });
         audioCache[normalizedPath] = audio;
     }
 
