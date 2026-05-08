@@ -5,6 +5,12 @@ import hashlib
 import hmac
 import json
 import os
+# Prevent ONNXRuntime from probing GPU devices in environments without drivers.
+# This suppresses warnings like: Failed to detect devices under "/sys/class/drm/card0"
+# and forces CPU-only execution unless explicit GPU providers are used.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+os.environ.setdefault("ROCM_VISIBLE_DEVICES", "")
+os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
 import re
 import random
 import time
