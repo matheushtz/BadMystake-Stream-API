@@ -1,5 +1,6 @@
 from flask import Flask, request, Response, send_from_directory
 import base64
+import importlib
 import hashlib
 import hmac
 import json
@@ -7,14 +8,11 @@ import os
 import re
 import time
 import uuid
+import wave
+from functools import lru_cache
 from datetime import datetime, timezone
 from html import unescape
 from urllib import error, parse, request as urllib_request
-
-try:
-    from gtts import gTTS
-except Exception:
-    gTTS = None
 
 app = Flask(__name__)
 
@@ -38,6 +36,8 @@ DEFAULT_TTS_REWARD_IDENTIFIERS = {
 APP_BOOT_TIME = int(os.times().elapsed)
 
 DEFAULT_BACKEND_TTS_LANG = "pt"
+DEFAULT_PIPER_TTS_LANG = "pt-BR"
+DEFAULT_PIPER_VOICE_NAME = "pt_BR-cadu-medium"
 MAX_TTS_FILE_AGE_SECONDS = 20 * 60
 MAX_TTS_FILE_COUNT = 200
 
@@ -95,6 +95,8 @@ def get_env_status():
         "TWITCH_TTS_REWARD_IDS": env_present("TWITCH_TTS_REWARD_IDS"),
         "TWITCH_TTS_REWARD_ID": env_present("TWITCH_TTS_REWARD_ID"),
         "TWITCH_TTS_LANG": env_present("TWITCH_TTS_LANG"),
+        "PIPER_TTS_MODEL_PATH": env_present("PIPER_TTS_MODEL_PATH"),
+        "PIPER_TTS_CONFIG_PATH": env_present("PIPER_TTS_CONFIG_PATH"),
         "PORT": env_present("PORT"),
     }
 
@@ -185,6 +187,49 @@ def normalize_backend_tts_lang(tts_lang):
 
     return normalized
 
+@lru_cache(maxsize=1)
+def get_piper_voice_class():
+    for module_name in ("piper", "piper.voice"):
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+
+        voice_class = getattr(module, "PiperVoice", None)
+        if voice_class is not None:
+            return voice_class
+
+    return None
+
+def get_piper_model_paths():
+    model_path = (os.environ.get("PIPER_TTS_MODEL_PATH", "") or "").strip()
+    config_path = (os.environ.get("PIPER_TTS_CONFIG_PATH", "") or "").strip()
+
+    if not model_path:
+        model_path = os.path.join(PROJECT_ROOT, "piper", f"{DEFAULT_PIPER_VOICE_NAME}.onnx")
+
+    if not config_path:
+        config_path = f"{model_path}.json"
+
+    return model_path, config_path
+
+@lru_cache(maxsize=2)
+def load_piper_voice(model_path, config_path):
+    piper_voice_class = get_piper_voice_class()
+    if piper_voice_class is None:
+        raise RuntimeError("Piper TTS indisponivel. Instale a dependencia piper-tts.")
+
+    return piper_voice_class.load(model_path, config_path=config_path, use_cuda=False)
+
+@lru_cache(maxsize=1)
+def get_gtts_class():
+    try:
+        module = importlib.import_module("gtts")
+    except Exception:
+        return None
+
+    return getattr(module, "gTTS", None)
+
 def cleanup_generated_tts_files():
     if not os.path.isdir(GENERATED_TTS_DIR):
         return
@@ -193,7 +238,7 @@ def cleanup_generated_tts_files():
     file_entries = []
 
     for name in os.listdir(GENERATED_TTS_DIR):
-        if not name.lower().endswith(".mp3"):
+        if not name.lower().endswith((".mp3", ".wav")):
             continue
 
         full_path = os.path.join(GENERATED_TTS_DIR, name)
@@ -227,14 +272,37 @@ def cleanup_generated_tts_files():
         except OSError:
             pass
 
-def generate_tts_audio_url(tts_text, tts_lang):
+def generate_tts_audio(tts_text, tts_lang):
     text = normalize_tts_text(tts_text)
     if not text:
-        return ""
+        return "", ""
 
-    if gTTS is None:
-        print("[TTS] gTTS indisponivel. Adicione a dependencia no ambiente.", flush=True)
-        return ""
+    model_path, config_path = get_piper_model_paths()
+    if get_piper_voice_class() is not None and os.path.exists(model_path) and os.path.exists(config_path):
+        os.makedirs(GENERATED_TTS_DIR, exist_ok=True)
+        cleanup_generated_tts_files()
+
+        filename = f"tts-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.wav"
+        output_path = os.path.join(GENERATED_TTS_DIR, filename)
+
+        try:
+            voice = load_piper_voice(model_path, config_path)
+            with wave.open(output_path, "wb") as wav_file:
+                voice.synthesize(text, wav_file)
+            return f"/mp3/tts-generated/{filename}", "piper"
+        except Exception as exc:
+            try:
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+            except OSError:
+                pass
+
+            print(f"[TTS] Falha ao gerar audio com Piper ({model_path}): {exc}", flush=True)
+
+    gtts_class = get_gtts_class()
+    if gtts_class is None:
+        print("[TTS] Piper indisponivel e gTTS nao esta instalado. Adicione piper-tts ou gTTS no ambiente.", flush=True)
+        return "", ""
 
     os.makedirs(GENERATED_TTS_DIR, exist_ok=True)
     cleanup_generated_tts_files()
@@ -244,7 +312,7 @@ def generate_tts_audio_url(tts_text, tts_lang):
     output_path = os.path.join(GENERATED_TTS_DIR, filename)
 
     try:
-        gTTS(text=text, lang=lang).save(output_path)
+        gtts_class(text=text, lang=lang).save(output_path)
     except Exception as exc:
         try:
             if os.path.exists(output_path):
@@ -252,10 +320,10 @@ def generate_tts_audio_url(tts_text, tts_lang):
         except OSError:
             pass
 
-        print(f"[TTS] Falha ao gerar audio ({lang}): {exc}", flush=True)
-        return ""
+        print(f"[TTS] Falha ao gerar audio com fallback legacy ({lang}): {exc}", flush=True)
+        return "", ""
 
-    return f"/mp3/tts-generated/{filename}"
+    return f"/mp3/tts-generated/{filename}", "gtts"
 
 def attach_backend_tts_audio(event_payload):
     if not isinstance(event_payload, dict):
@@ -269,10 +337,10 @@ def attach_backend_tts_audio(event_payload):
     event_payload["tts_text"] = tts_text
     event_payload["tts_lang"] = tts_lang
 
-    tts_audio_url = generate_tts_audio_url(tts_text, tts_lang)
+    tts_audio_url, tts_engine = generate_tts_audio(tts_text, tts_lang)
     if tts_audio_url:
         event_payload["tts_audio_url"] = tts_audio_url
-        event_payload["tts_engine"] = "gtts"
+        event_payload["tts_engine"] = tts_engine
 
 def steam_target_steamid64():
     return get_first_env("STEAM_TARGET_STEAMID64")

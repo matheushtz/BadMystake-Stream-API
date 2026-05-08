@@ -51,10 +51,11 @@ Para fazer um reward da Twitch falar no overlay do OBS, configure:
 - `TWITCH_TTS_REWARD_IDS`
 - `TWITCH_TTS_REWARD_ID` (single reward ID fallback)
 - `TWITCH_TTS_LANG` (opcional, padrao `pt-BR`)
+- `PIPER_TTS_MODEL_PATH` e `PIPER_TTS_CONFIG_PATH` para apontar para o modelo `pt_BR-cadu-medium`
 
 Quando um reward configurado e resgatado:
 
-1. O backend gera um arquivo de audio MP3 usando `gTTS`.
+1. O backend gera um arquivo de audio WAV usando Piper TTS com a voz `pt_BR-cadu-medium`.
 2. O payload enviado para o overlay inclui `tts_audio_url`.
 3. O JavaScript do OBS toca esse arquivo (em vez de depender apenas do `speechSynthesis` local).
 
@@ -73,7 +74,7 @@ Observacoes:
 - Os arquivos TTS gerados ficam em `/mp3/tts-generated/`.
 - O backend remove arquivos antigos automaticamente para evitar crescimento infinito.
 - Se a geracao de audio falhar, o overlay ainda tenta o fallback via `speechSynthesis`.
-- O `gTTS` depende de acesso a internet para gerar os arquivos.
+- Piper trabalha com modelo local; se o modelo nao estiver disponivel, o backend pode cair no fallback legacy.
 
 ### Como funciona a integracao com o chat
 
@@ -216,7 +217,7 @@ Isso permite manter o historico por jogo e usar a mesma base para futuras expans
 2. Habilite `Control audio via OBS` na Browser Source para garantir saida no mixer.
 3. Dispare a criacao da assinatura em `/twitch/eventsub/subscribe`.
 4. Teste manual com `/twitch/powerup/test?text=Mensagem+de+teste`.
-5. Ao ocorrer um novo resgate na Twitch, a pagina deve tocar o MP3 gerado para TTS (ou audio mapeado quando nao for TTS).
+5. Ao ocorrer um novo resgate na Twitch, a pagina deve tocar o audio gerado para TTS (ou audio mapeado quando nao for TTS).
 
 ## Arquivos principais
 
