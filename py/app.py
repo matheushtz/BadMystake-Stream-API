@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import re
+import random
 import time
 import uuid
 import wave
@@ -38,6 +39,8 @@ APP_BOOT_TIME = int(os.times().elapsed)
 DEFAULT_BACKEND_TTS_LANG = "pt"
 DEFAULT_PIPER_TTS_LANG = "pt-BR"
 DEFAULT_PIPER_VOICE_NAME = "pt_BR-cadu-medium"
+PIPER_MODEL_DIR = os.path.join(PROJECT_ROOT, "tts-model")
+PIPER_JSON_DIR = os.path.join(PROJECT_ROOT, "tts-json")
 MAX_TTS_FILE_AGE_SECONDS = 20 * 60
 MAX_TTS_FILE_COUNT = 200
 
@@ -95,8 +98,8 @@ def get_env_status():
         "TWITCH_TTS_REWARD_IDS": env_present("TWITCH_TTS_REWARD_IDS"),
         "TWITCH_TTS_REWARD_ID": env_present("TWITCH_TTS_REWARD_ID"),
         "TWITCH_TTS_LANG": env_present("TWITCH_TTS_LANG"),
-        "PIPER_TTS_MODEL_PATH": env_present("PIPER_TTS_MODEL_PATH"),
-        "PIPER_TTS_CONFIG_PATH": env_present("PIPER_TTS_CONFIG_PATH"),
+        "PIPER_TTS_MODEL_DIR": env_present("PIPER_TTS_MODEL_DIR"),
+        "PIPER_TTS_JSON_DIR": env_present("PIPER_TTS_JSON_DIR"),
         "PORT": env_present("PORT"),
     }
 
@@ -201,17 +204,33 @@ def get_piper_voice_class():
 
     return None
 
-def get_piper_model_paths():
-    model_path = (os.environ.get("PIPER_TTS_MODEL_PATH", "") or "").strip()
-    config_path = (os.environ.get("PIPER_TTS_CONFIG_PATH", "") or "").strip()
+def get_piper_voice_pairs():
+    model_dir = (os.environ.get("PIPER_TTS_MODEL_DIR", "") or "").strip() or PIPER_MODEL_DIR
+    json_dir = (os.environ.get("PIPER_TTS_JSON_DIR", "") or "").strip() or PIPER_JSON_DIR
 
-    if not model_path:
-        model_path = os.path.join(PROJECT_ROOT, "piper", f"{DEFAULT_PIPER_VOICE_NAME}.onnx")
+    if not os.path.isdir(model_dir) or not os.path.isdir(json_dir):
+        return []
 
-    if not config_path:
-        config_path = f"{model_path}.json"
+    model_files = []
+    for name in os.listdir(model_dir):
+        if name.lower().endswith(".onnx"):
+            model_files.append(os.path.join(model_dir, name))
 
-    return model_path, config_path
+    pairs = []
+    for model_path in model_files:
+        model_name = os.path.basename(model_path)
+        config_path = os.path.join(json_dir, f"{model_name}.json")
+        if os.path.isfile(config_path):
+            pairs.append((model_path, config_path))
+
+    return pairs
+
+def pick_random_piper_voice_pair():
+    pairs = get_piper_voice_pairs()
+    if not pairs:
+        return None, None
+
+    return random.choice(pairs)
 
 @lru_cache(maxsize=2)
 def load_piper_voice(model_path, config_path):
@@ -277,8 +296,8 @@ def generate_tts_audio(tts_text, tts_lang):
     if not text:
         return "", ""
 
-    model_path, config_path = get_piper_model_paths()
-    if get_piper_voice_class() is not None and os.path.exists(model_path) and os.path.exists(config_path):
+    model_path, config_path = pick_random_piper_voice_pair()
+    if get_piper_voice_class() is not None and model_path and config_path:
         os.makedirs(GENERATED_TTS_DIR, exist_ok=True)
         cleanup_generated_tts_files()
 
@@ -289,6 +308,7 @@ def generate_tts_audio(tts_text, tts_lang):
             voice = load_piper_voice(model_path, config_path)
             with wave.open(output_path, "wb") as wav_file:
                 voice.synthesize(text, wav_file)
+            print(f"[TTS] Piper selecionado: {os.path.basename(model_path)}", flush=True)
             return f"/mp3/tts-generated/{filename}", "piper"
         except Exception as exc:
             try:
