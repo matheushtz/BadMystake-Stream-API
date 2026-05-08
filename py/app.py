@@ -19,10 +19,15 @@ except Exception:
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FILE_PATH = os.path.join(BASE_DIR, "dados.json")
-STEAM_GAMES_FILE = os.path.join(BASE_DIR, "steam_games.json")
-OGG_DIR = os.path.join(BASE_DIR, "ogg")
-MP3_DIR = os.path.join(BASE_DIR, "mp3")
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+JSON_DIR = os.path.join(PROJECT_ROOT, "json")
+HTML_DIR = os.path.join(PROJECT_ROOT, "html")
+CSS_DIR = os.path.join(PROJECT_ROOT, "css")
+JS_DIR = os.path.join(PROJECT_ROOT, "js")
+OGG_DIR = os.path.join(PROJECT_ROOT, "ogg")
+MP3_DIR = os.path.join(PROJECT_ROOT, "mp3")
+FILE_PATH = os.path.join(JSON_DIR, "dados.json")
+STEAM_GAMES_FILE = os.path.join(JSON_DIR, "steam_games.json")
 GENERATED_TTS_DIR = os.path.join(MP3_DIR, "tts-generated")
 DEFAULT_DATA = {}
 DEFAULT_TTS_REWARD_IDENTIFIERS = {
@@ -318,7 +323,7 @@ def save_steam_games(games):
 
     publish_file_to_github(
         serialized,
-        default_file_path="steam_games.json",
+        default_file_path="json/steam_games.json",
         commit_message="chore: update steam_games.json",
         file_path_env="GITHUB_STEAM_GAMES_FILE_PATH",
     )
@@ -780,7 +785,7 @@ def load_data():
     return dict(DEFAULT_DATA)
 
 # Salva os dados no arquivo local e publica no GitHub (se configurado)
-def get_github_publish_config(default_file_path="dados.json", file_path_env="GITHUB_FILE_PATH"):
+def get_github_publish_config(default_file_path="json/dados.json", file_path_env="GITHUB_FILE_PATH"):
     repository = (os.environ.get("GITHUB_REPOSITORY", "") or "").strip()
     repository_owner = None
     repository_name = None
@@ -804,7 +809,7 @@ def get_github_publish_config(default_file_path="dados.json", file_path_env="GIT
     }
 
 # Publica o conteúdo no GitHub usando a API. O conteúdo deve ser uma string já formatada (ex: JSON).
-def publish_file_to_github(content, default_file_path="dados.json", commit_message=None, file_path_env="GITHUB_FILE_PATH"):
+def publish_file_to_github(content, default_file_path="json/dados.json", commit_message=None, file_path_env="GITHUB_FILE_PATH"):
     config = get_github_publish_config(default_file_path=default_file_path, file_path_env=file_path_env)
     token = config["token"]
     owner = config["owner"]
@@ -880,7 +885,7 @@ def publish_file_to_github(content, default_file_path="dados.json", commit_messa
         print(f"Falha ao publicar {file_path} no GitHub: {exc}")
 
 def publish_data_to_github(content):
-    publish_file_to_github(content, default_file_path="dados.json", commit_message="chore: update dados.json", file_path_env="GITHUB_FILE_PATH")
+    publish_file_to_github(content, default_file_path="json/dados.json", commit_message="chore: update dados.json", file_path_env="GITHUB_FILE_PATH")
 
 # Salva os dados no arquivo local e publica no GitHub (se configurado)
 def save_data(data):
@@ -1326,34 +1331,34 @@ def twitch_eventsub_subscribe():
 # Webpage para OBS: fica escutando estado de power-up e toca o audio quando houver novo trigger.
 @app.route("/obs/powerup", methods=["GET"])
 def obs_powerup_page():
-    return send_file_no_cache(BASE_DIR, "obs_powerup.html")
+    return send_file_no_cache(HTML_DIR, "obs_powerup.html")
 
 @app.route("/obs/powerup.js", methods=["GET"])
 def obs_powerup_script():
-    return send_file_no_cache(BASE_DIR, "obs_powerup.js")
+    return send_file_no_cache(JS_DIR, "obs_powerup.js")
 
 @app.route("/obs/powerup.css", methods=["GET"])
 def obs_powerup_styles():
-    return send_file_no_cache(BASE_DIR, "obs_powerup.css")
+    return send_file_no_cache(CSS_DIR, "obs_powerup.css")
 
 # Webpage para OBS: roleta/torchlight
 @app.route("/torchlight/roleta/obs", methods=["GET"])
 def obs_roleta_page():
-    return send_file_no_cache(BASE_DIR, "torchlight_roleta_obs.html")
+    return send_file_no_cache(HTML_DIR, "torchlight_roleta_obs.html")
 
 @app.route("/torchlight/roleta/obs.js", methods=["GET"])
 def obs_roleta_script():
-    return send_file_no_cache(BASE_DIR, "torchlight_roleta_obs.js")
+    return send_file_no_cache(JS_DIR, "torchlight_roleta_obs.js")
 
 @app.route("/torchlight/roleta/obs.css", methods=["GET"])
 def obs_roleta_styles():
-    return send_file_no_cache(BASE_DIR, "torchlight_roleta_obs.css")
+    return send_file_no_cache(CSS_DIR, "torchlight_roleta_obs.css")
 # Arquivo de audio para a webpage do OBS.
 @app.route("/obs/nossa.mp3", methods=["GET"])
 def obs_powerup_audio():
     # Compatibilidade: se nao houver mp3, usa o ogg padrao.
-    if os.path.exists(os.path.join(BASE_DIR, "nossa.mp3")):
-        return send_file_no_cache(BASE_DIR, "nossa.mp3")
+    if os.path.exists(os.path.join(MP3_DIR, "nossa.mp3")):
+        return send_file_no_cache(MP3_DIR, "nossa.mp3")
     return send_file_no_cache(OGG_DIR, "nossa.ogg")
 
 @app.route("/ogg/nossa.ogg", methods=["GET"])

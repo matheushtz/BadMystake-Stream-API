@@ -1,4 +1,4 @@
-﻿// Roleta OBS -- nova versão com gradiente cônico e polling do servidor
+// Roleta OBS -- nova versão com gradiente cônico e polling do servidor
 (function(){
   console.log('[ROLETA] Inicializando...');
 
