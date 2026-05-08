@@ -16,10 +16,25 @@ import random
 import time
 import uuid
 import wave
+import io
+import struct
 from functools import lru_cache
 from datetime import datetime, timezone
 from html import unescape
 from urllib import error, parse, request as urllib_request
+
+# Piper TTS synthesis config (imported on demand to avoid import errors if piper not installed)
+_synthesis_config = None
+def get_synthesis_config():
+    global _synthesis_config
+    if _synthesis_config is not None:
+        return _synthesis_config
+    try:
+        from piper.config import SynthesisConfig
+        _synthesis_config = SynthesisConfig()
+        return _synthesis_config
+    except ImportError:
+        return None
 
 app = Flask(__name__)
 
@@ -330,6 +345,8 @@ def generate_tts_audio(tts_text, tts_lang):
     if not text:
         return "", ""
 
+    print(f"[TTS] Texto normalizado para sintetiza: '{text}' (len={len(text)})", flush=True)
+
     piper_pairs = get_piper_voice_pairs()
     random.shuffle(piper_pairs)
 
@@ -342,13 +359,31 @@ def generate_tts_audio(tts_text, tts_lang):
 
         for model_path, config_path in piper_pairs:
             try:
+                print(f"[TTS] Tentando modelo: {os.path.basename(model_path)}", flush=True)
                 voice = load_piper_voice(model_path, config_path)
+                
+                syn_config = get_synthesis_config()
+                if syn_config is None:
+                    raise RuntimeError("SynthesisConfig indisponivel")
+                
+                print(f"[TTS] Abrindo WAV para escrita em: {output_path}", flush=True)
+                
+                # Abre WAV e consome generator de síntese
                 with wave.open(output_path, "wb") as wav_file:
-                    sample_rate = getattr(getattr(voice, "config", None), "sample_rate", 22050)
                     wav_file.setnchannels(1)
                     wav_file.setsampwidth(2)
-                    wav_file.setframerate(int(sample_rate) if sample_rate else 22050)
-                    voice.synthesize(text, wav_file)
+                    wav_file.setframerate(voice.config.sample_rate)
+                    
+                    print(f"[TTS] Iniciando síntese com voice.synthesize()...", flush=True)
+                    chunk_count = 0
+                    for chunk in voice.synthesize(text, syn_config):
+                        chunk_count += 1
+                        wav_file.writeframes(chunk.audio_int16_bytes)
+                    
+                    print(f"[TTS] Síntese completa: {chunk_count} chunks escritos", flush=True)
+
+                wav_size = os.path.getsize(output_path)
+                print(f"[TTS] Arquivo WAV gerado: {wav_size} bytes", flush=True)
 
                 wav_ok, wav_reason = validate_generated_wav_file(output_path)
                 if not wav_ok:
@@ -357,6 +392,7 @@ def generate_tts_audio(tts_text, tts_lang):
                 print(f"[TTS] Piper selecionado: {os.path.basename(model_path)}", flush=True)
                 return f"/mp3/tts-generated/{filename}", "piper"
             except Exception as exc:
+                print(f"[TTS] Exceção durante síntese: {type(exc).__name__}: {exc}", flush=True)
                 try:
                     if os.path.exists(output_path):
                         os.remove(output_path)
