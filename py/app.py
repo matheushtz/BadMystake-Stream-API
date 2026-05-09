@@ -62,8 +62,64 @@ DEFAULT_PIPER_TTS_LANG = "pt-BR"
 DEFAULT_PIPER_VOICE_NAME = "pt_BR-cadu-medium"
 PIPER_MODEL_DIR = os.path.join(PROJECT_ROOT, "tts-model")
 PIPER_JSON_DIR = os.path.join(PROJECT_ROOT, "tts-json")
+TTS_CONFIG_FILE = os.path.join(JSON_DIR, "tts_config.json")
+DEFAULT_TTS_SPEED = 1.0
+MIN_TTS_SPEED = 0.5
+MAX_TTS_SPEED = 2.0
 MAX_TTS_FILE_AGE_SECONDS = 20 * 60
-MAX_TTS_FILE_COUNT = 200
+MAX_TTS_FILE_COUNT = 5
+
+def get_configured_tts_speed(model_name=None):
+    speed = DEFAULT_TTS_SPEED
+
+    try:
+        if os.path.isfile(TTS_CONFIG_FILE):
+            with open(TTS_CONFIG_FILE, "r", encoding="utf-8") as config_file:
+                config_data = json.load(config_file)
+
+            if isinstance(config_data, dict):
+                # Se há nome de modelo, busca configuração específica
+                if model_name and model_name in config_data:
+                    model_config = config_data.get(model_name)
+                    if isinstance(model_config, dict) and "tts_speed" in model_config:
+                        speed = float(model_config.get("tts_speed"))
+                # Fallback: busca chave legada "tts_speed" no root
+                elif "tts_speed" in config_data:
+                    speed = float(config_data.get("tts_speed"))
+    except Exception as exc:
+        print(f"[TTS] Falha ao ler config de velocidade ({TTS_CONFIG_FILE}): {exc}", flush=True)
+
+    if speed < MIN_TTS_SPEED:
+        speed = MIN_TTS_SPEED
+    if speed > MAX_TTS_SPEED:
+        speed = MAX_TTS_SPEED
+
+    return speed
+
+def apply_piper_tts_speed(syn_config, model_name=None):
+    if syn_config is None:
+        return DEFAULT_TTS_SPEED
+
+    speed = get_configured_tts_speed(model_name)
+
+    # Piper versions differ in field names; try common direct speed fields first.
+    for attr_name in ("speed", "rate", "speaking_rate", "tempo", "pace"):
+        if hasattr(syn_config, attr_name):
+            try:
+                setattr(syn_config, attr_name, speed)
+                return speed
+            except Exception:
+                pass
+
+    # Piper commonly exposes length_scale: higher value = slower speech.
+    if hasattr(syn_config, "length_scale"):
+        try:
+            setattr(syn_config, "length_scale", 1.0 / speed)
+            return speed
+        except Exception:
+            pass
+
+    return speed
 
 def send_file_no_cache(directory, filename):
     response = send_from_directory(directory, filename)
@@ -365,8 +421,12 @@ def generate_tts_audio(tts_text, tts_lang):
                 if syn_config is None:
                     raise RuntimeError("SynthesisConfig indisponivel")
                 
-                # cria nome de arquivo com: <modelo_escolhido>-<10 primeiros caracteres da mensagem>
+                # extrai nome do modelo (ex: pt_BR-cadu-medium) para configuração
                 model_name = os.path.splitext(os.path.basename(model_path))[0]
+                configured_speed = apply_piper_tts_speed(syn_config, model_name)
+                print(f"[TTS] Velocidade configurada (modelo={model_name}, tts_speed={configured_speed})", flush=True)
+                
+                # cria nome de arquivo com: <modelo_escolhido>-<10 primeiros caracteres da mensagem>
                 safe_model = re.sub(r"[^A-Za-z0-9_-]", "_", model_name)
                 snippet = text[:10]
                 safe_snippet = re.sub(r"[^A-Za-z0-9_-]", "_", snippet)

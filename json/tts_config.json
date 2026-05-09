@@ -1,0 +1,14 @@
+{
+  "pt_BR-cadu-medium": {
+    "tts_speed": 0.75
+  },
+  "pt_BR-jeff-medium": {
+    "tts_speed": 0.70
+  },
+  "pt_BR-sage_13364-medium": {
+    "tts_speed": 0.75
+  },
+  "pt_PT-tugão-medium": {
+    "tts_speed": 0.65
+  }
+}
