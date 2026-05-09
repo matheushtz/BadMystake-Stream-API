@@ -9,7 +9,7 @@ var activeAudioPath = null;
 
 var listaPedidos = [];
 var stateUrl = "/twitch/powerup/state";
-var pollIntervalMs = 1200;
+var pollIntervalMs = 600;
 var lastSeq = null;
 
 var REWARD_AUDIO_MAP = {

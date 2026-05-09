@@ -312,6 +312,7 @@ def cleanup_generated_tts_files():
         except OSError:
             pass
 
+
 def validate_generated_wav_file(wav_path):
     try:
         if not os.path.isfile(wav_path):
@@ -341,6 +342,7 @@ def validate_generated_wav_file(wav_path):
         return False, f"falha ao validar wav: {exc}"
 
 def generate_tts_audio(tts_text, tts_lang):
+    start_time = time.time()
     text = normalize_tts_text(tts_text)
     if not text:
         return "", ""
@@ -354,9 +356,6 @@ def generate_tts_audio(tts_text, tts_lang):
         os.makedirs(GENERATED_TTS_DIR, exist_ok=True)
         cleanup_generated_tts_files()
 
-        filename = f"tts-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.wav"
-        output_path = os.path.join(GENERATED_TTS_DIR, filename)
-
         for model_path, config_path in piper_pairs:
             try:
                 print(f"[TTS] Tentando modelo: {os.path.basename(model_path)}", flush=True)
@@ -366,6 +365,19 @@ def generate_tts_audio(tts_text, tts_lang):
                 if syn_config is None:
                     raise RuntimeError("SynthesisConfig indisponivel")
                 
+                # cria nome de arquivo com: <modelo_escolhido>-<10 primeiros caracteres da mensagem>
+                model_name = os.path.splitext(os.path.basename(model_path))[0]
+                safe_model = re.sub(r"[^A-Za-z0-9_-]", "_", model_name)
+                snippet = text[:10]
+                safe_snippet = re.sub(r"[^A-Za-z0-9_-]", "_", snippet)
+                filename = f"{safe_model}-{safe_snippet}.wav"
+                output_path = os.path.join(GENERATED_TTS_DIR, filename)
+
+                # se já existir (colisão), adiciona sufixo curto único
+                if os.path.exists(output_path):
+                    filename = f"{safe_model}-{safe_snippet}-{uuid.uuid4().hex[:8]}.wav"
+                    output_path = os.path.join(GENERATED_TTS_DIR, filename)
+
                 print(f"[TTS] Abrindo WAV para escrita em: {output_path}", flush=True)
                 
                 # Abre WAV e consome generator de síntese
@@ -390,6 +402,8 @@ def generate_tts_audio(tts_text, tts_lang):
                     raise RuntimeError(f"wav invalido: {wav_reason}")
 
                 print(f"[TTS] Piper selecionado: {os.path.basename(model_path)}", flush=True)
+                end_time = time.time()
+                print(f"[TTS] Síntese concluída (engine=piper) tempo={(end_time - start_time):.3f}s path=/mp3/tts-generated/{filename}", flush=True)
                 return f"/mp3/tts-generated/{filename}", "piper"
             except Exception as exc:
                 print(f"[TTS] Exceção durante síntese: {type(exc).__name__}: {exc}", flush=True)
@@ -412,8 +426,15 @@ def generate_tts_audio(tts_text, tts_lang):
     cleanup_generated_tts_files()
 
     lang = normalize_backend_tts_lang(tts_lang)
-    filename = f"tts-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.mp3"
+    safe_model = "gtts"
+    snippet = text[:10]
+    safe_snippet = re.sub(r"[^A-Za-z0-9_-]", "_", snippet)
+    filename = f"{safe_model}-{safe_snippet}.mp3"
     output_path = os.path.join(GENERATED_TTS_DIR, filename)
+
+    if os.path.exists(output_path):
+        filename = f"{safe_model}-{safe_snippet}-{uuid.uuid4().hex[:8]}.mp3"
+        output_path = os.path.join(GENERATED_TTS_DIR, filename)
 
     try:
         gtts_class(text=text, lang=lang).save(output_path)
@@ -427,6 +448,8 @@ def generate_tts_audio(tts_text, tts_lang):
         print(f"[TTS] Falha ao gerar audio com fallback legacy ({lang}): {exc}", flush=True)
         return "", ""
 
+    end_time = time.time()
+    print(f"[TTS] Síntese concluída (engine=gtts) tempo={(end_time - start_time):.3f}s path=/mp3/tts-generated/{filename}", flush=True)
     return f"/mp3/tts-generated/{filename}", "gtts"
 
 def attach_backend_tts_audio(event_payload):
