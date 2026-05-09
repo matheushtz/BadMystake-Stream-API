@@ -33,12 +33,24 @@ Esse fluxo permite unir comandos do chat, eventos da Twitch e resposta visual/so
 
 ### Variaveis de ambiente (Render)
 
+**Twitch**
 - `TWITCH_CHANNEL_ID`
 - `TWITCH_DEV_ID`
 - `TWITCH_SECRET`
 - `TWITCH_TOKEN`
+- `TWITCH_TTS_REWARD_IDS` (IDs dos rewards que acionam TTS)
+- `TWITCH_TTS_REWARD_ID` (fallback para um ID unico de reward TTS)
+- `TWITCH_TTS_LANG` (idioma TTS, padrao: `pt-BR`)
+
+**Steam**
 - `STEAM_WEB_API_KEY` (ou `STEAM_API_KEY`)
 - `STEAM_TARGET_STEAMID64`
+
+**PIPER TTS** (sintese de fala local)
+- `PIPER_TTS_MODEL_PATH` (caminho para o arquivo `.onnx`, ex: `/tts-model/pt_BR-cadu-medium.onnx`)
+- `PIPER_TTS_CONFIG_PATH` (caminho para o arquivo `.json` do modelo)
+
+**GitHub** (publicacao de dados)
 - `PUBLIC_BASE_URL` (exemplo: `https://seu-servico.onrender.com`)
 - `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`
 - `GITHUB_FILE_PATH` para publicar `dados.json`
@@ -75,6 +87,89 @@ Observacoes:
 - O backend remove arquivos antigos automaticamente para evitar crescimento infinito.
 - Se a geracao de audio falhar, o overlay ainda tenta o fallback via `speechSynthesis`.
 - Piper trabalha com modelo local; se o modelo nao estiver disponivel, o backend pode cair no fallback legacy.
+
+### Mecanismo de velocidade TTS com PIPER
+
+A velocidade da fala sintetizada pode ser configurada dinamicamente atraves do arquivo `json/tts_config.json`, sem necessidade de reiniciar o servico.
+
+#### Configuracao de velocidade
+
+O arquivo `tts_config.json` segue este padrao:
+
+**Configuracao global (aplica a todos os modelos):**
+```json
+{
+  "tts_speed": 1.0
+}
+```
+
+**Configuracao por modelo (sobrescreve global):**
+```json
+{
+  "pt_BR-cadu-medium": {
+    "tts_speed": 0.9
+  },
+  "pt_BR-jeff-medium": {
+    "tts_speed": 1.1
+  },
+  "tts_speed": 1.0
+}
+```
+
+#### Parametros de velocidade
+
+- **Intervalo valido**: `0.5` a `2.0`
+- **Padrao**: `1.0` (velocidade normal)
+- **Minimo**: `0.5` (mais lento, 50% da velocidade original)
+- **Maximo**: `2.0` (mais rapido, 200% da velocidade original)
+- **Fora do intervalo**: valores invalidos sao automaticamente ajustados para o limite mais proximo
+
+#### Como funciona
+
+Internamente, o PIPER usa o parametro `length_scale` para ajustar a velocidade:
+
+- Velocidade `< 1.0` → `length_scale` **maior** → fala **mais lenta**
+- Velocidade `1.0` → `length_scale = 1.0` → fala **normal**
+- Velocidade `> 1.0` → `length_scale` **menor** → fala **mais rapida**
+
+A relacao matematica: `length_scale = 1.0 / velocity`
+
+#### Exemplo de uso
+
+Para fazer a voz `pt_BR-cadu-medium` falar 20% mais rapido:
+
+```json
+{
+  "pt_BR-cadu-medium": {
+    "tts_speed": 1.2
+  }
+}
+```
+
+O backend valida a configuracao a cada geracao de audio. Se houver erro na leitura do arquivo ou valor invalido, o sistema usa o padrao `1.0`.
+
+#### Direitos reservados - PIPER TTS
+
+> **PIPER** é um sintetizador de fala de texto local de codigo aberto sob a licenca **MIT**.
+> 
+> Copyright (c) 2023 Rhasspy Project
+> 
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> - The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+> - Os modelos de voz (ONNX) estao sob licencas especificas por voz, incluindo licencas CC0 1.0 Universal.
+>
+> Para mais informacoes, consulte: https://github.com/rhasspy/piper
+
+#### Integracao com rewards TTS
+
+Quando um reward TTS é resgatado na Twitch:
+
+1. O backend le `tts_config.json` para obter a velocidade configurada.
+2. A velocidade é aplicada ao modelo PIPER especificado (ex: `pt_BR-cadu-medium`).
+3. O audio sintetizado é gerado com a velocidade definida.
+4. O arquivo WAV é salvo em `/mp3/tts-generated/` com um hash unique.
+5. A URL do audio é enviada ao overlay para reproducao.
 
 ### Como funciona a integracao com o chat
 
