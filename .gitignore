@@ -5,3 +5,12 @@
 # Python cache
 __pycache__/
 *.pyc
+
+# Large TTS model files (ONNX models exceed GitHub 100MB limit)
+tts-model/*.onnx
+tts-model/*.onnx.data
+
+# Audio cache
+mp3/tts-generated/
+*.wav
+*.mp3
