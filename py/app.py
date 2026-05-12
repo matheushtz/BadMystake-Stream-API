@@ -5,6 +5,8 @@ import hashlib
 import hmac
 import json
 import os
+import threading
+from collections import OrderedDict
 # Prevent ONNXRuntime from probing GPU devices in environments without drivers.
 # This suppresses warnings like: Failed to detect devices under "/sys/class/drm/card0"
 # and forces CPU-only execution unless explicit GPU providers are used.
@@ -68,6 +70,13 @@ MIN_TTS_SPEED = 0.5
 MAX_TTS_SPEED = 2.0
 MAX_TTS_FILE_AGE_SECONDS = 20 * 60
 MAX_TTS_FILE_COUNT = 5
+
+# TTS Audio Cache em memória (sem disco para compatibilidade com Render/serverless)
+# Estrutura: {cache_id: (audio_bytes, engine, timestamp)}
+TTS_AUDIO_CACHE = OrderedDict()
+TTS_AUDIO_CACHE_MAX_SIZE_MB = 100
+TTS_AUDIO_CACHE_TTL_SECONDS = 60  # 1 minuto
+TTS_AUDIO_CACHE_LOCK = threading.Lock()
 
 def get_configured_tts_speed(model_name=None):
     speed = DEFAULT_TTS_SPEED
@@ -267,6 +276,65 @@ def normalize_backend_tts_lang(tts_lang):
 
     return normalized
 
+def get_tts_cache_id(text, engine="piper"):
+    """Gera ID único para cache de áudio TTS"""
+    key = f"{text}_{engine}".encode('utf-8')
+    return hashlib.sha256(key).hexdigest()
+
+def cleanup_expired_tts_cache():
+    """Remove áudios do cache que expiraram (TTL > 60s)"""
+    now = time.time()
+    expired_keys = []
+    
+    with TTS_AUDIO_CACHE_LOCK:
+        for cache_id, (_, _, timestamp) in TTS_AUDIO_CACHE.items():
+            if now - timestamp > TTS_AUDIO_CACHE_TTL_SECONDS:
+                expired_keys.append(cache_id)
+        
+        for cache_id in expired_keys:
+            del TTS_AUDIO_CACHE[cache_id]
+            print(f"[TTS-CACHE] Expirado: {cache_id[:8]}...", flush=True)
+
+def add_to_tts_cache(cache_id, audio_bytes, engine):
+    """Adiciona áudio ao cache com proteção de tamanho máximo"""
+    cleanup_expired_tts_cache()
+    
+    with TTS_AUDIO_CACHE_LOCK:
+        # Remove se já existe (reinsert no final da OrderedDict)
+        if cache_id in TTS_AUDIO_CACHE:
+            del TTS_AUDIO_CACHE[cache_id]
+        
+        TTS_AUDIO_CACHE[cache_id] = (audio_bytes, engine, time.time())
+        
+        # Calcula tamanho total do cache
+        total_size_bytes = sum(len(data) for data, _, _ in TTS_AUDIO_CACHE.values())
+        total_size_mb = total_size_bytes / (1024 * 1024)
+        
+        # Remove itens antigos se excede limite
+        while total_size_mb > TTS_AUDIO_CACHE_MAX_SIZE_MB and len(TTS_AUDIO_CACHE) > 1:
+            old_id, old_data = TTS_AUDIO_CACHE.popitem(last=False)
+            total_size_bytes -= len(old_data[0])
+            total_size_mb = total_size_bytes / (1024 * 1024)
+            print(f"[TTS-CACHE] Removido (limite): {old_id[:8]}...", flush=True)
+        
+        print(f"[TTS-CACHE] Adicionado: {cache_id[:8]}... (tamanho={len(audio_bytes)/1024:.1f}KB, cache_total={total_size_mb:.1f}MB)", flush=True)
+
+def get_from_tts_cache(cache_id):
+    """Recupera áudio do cache"""
+    with TTS_AUDIO_CACHE_LOCK:
+        if cache_id in TTS_AUDIO_CACHE:
+            audio_bytes, engine, timestamp = TTS_AUDIO_CACHE[cache_id]
+            age = time.time() - timestamp
+            if age > TTS_AUDIO_CACHE_TTL_SECONDS:
+                del TTS_AUDIO_CACHE[cache_id]
+                print(f"[TTS-CACHE] Expirado durante acesso: {cache_id[:8]}...", flush=True)
+                return None, None
+            
+            print(f"[TTS-CACHE] Hit: {cache_id[:8]}... (idade={age:.1f}s, engine={engine})", flush=True)
+            return audio_bytes, engine
+    
+    return None, None
+
 @lru_cache(maxsize=1)
 def get_piper_voice_class():
     for module_name in ("piper", "piper.voice"):
@@ -405,13 +473,16 @@ def generate_tts_audio(tts_text, tts_lang):
 
     print(f"[TTS] Texto normalizado para sintetiza: '{text}' (len={len(text)})", flush=True)
 
+    cache_id = get_tts_cache_id(text)
+    cached_bytes, cached_engine = get_from_tts_cache(cache_id)
+    if cached_bytes:
+        print(f"[TTS] Usando áudio em cache: {cache_id[:8]}...", flush=True)
+        return cache_id, cached_engine
+
     piper_pairs = get_piper_voice_pairs()
     random.shuffle(piper_pairs)
 
     if get_piper_voice_class() is not None and piper_pairs:
-        os.makedirs(GENERATED_TTS_DIR, exist_ok=True)
-        cleanup_generated_tts_files()
-
         for model_path, config_path in piper_pairs:
             try:
                 print(f"[TTS] Tentando modelo: {os.path.basename(model_path)}", flush=True)
@@ -421,27 +492,14 @@ def generate_tts_audio(tts_text, tts_lang):
                 if syn_config is None:
                     raise RuntimeError("SynthesisConfig indisponivel")
                 
-                # extrai nome do modelo (ex: pt_BR-cadu-medium) para configuração
+                # extrai nome do modelo para log
                 model_name = os.path.splitext(os.path.basename(model_path))[0]
                 configured_speed = apply_piper_tts_speed(syn_config, model_name)
                 print(f"[TTS] Velocidade configurada (modelo={model_name}, tts_speed={configured_speed})", flush=True)
                 
-                # cria nome de arquivo com: <modelo_escolhido>-<10 primeiros caracteres da mensagem>
-                safe_model = re.sub(r"[^A-Za-z0-9_-]", "_", model_name)
-                snippet = text[:10]
-                safe_snippet = re.sub(r"[^A-Za-z0-9_-]", "_", snippet)
-                filename = f"{safe_model}-{safe_snippet}.wav"
-                output_path = os.path.join(GENERATED_TTS_DIR, filename)
-
-                # se já existir (colisão), adiciona sufixo curto único
-                if os.path.exists(output_path):
-                    filename = f"{safe_model}-{safe_snippet}-{uuid.uuid4().hex[:8]}.wav"
-                    output_path = os.path.join(GENERATED_TTS_DIR, filename)
-
-                print(f"[TTS] Abrindo WAV para escrita em: {output_path}", flush=True)
-                
-                # Abre WAV e consome generator de síntese
-                with wave.open(output_path, "wb") as wav_file:
+                # Síntese em memória via BytesIO
+                wav_buffer = io.BytesIO()
+                with wave.open(wav_buffer, "wb") as wav_file:
                     wav_file.setnchannels(1)
                     wav_file.setsampwidth(2)
                     wav_file.setframerate(voice.config.sample_rate)
@@ -454,25 +512,33 @@ def generate_tts_audio(tts_text, tts_lang):
                     
                     print(f"[TTS] Síntese completa: {chunk_count} chunks escritos", flush=True)
 
-                wav_size = os.path.getsize(output_path)
-                print(f"[TTS] Arquivo WAV gerado: {wav_size} bytes", flush=True)
+                wav_bytes = wav_buffer.getvalue()
+                wav_size = len(wav_bytes)
+                print(f"[TTS] Áudio WAV em memória: {wav_size} bytes", flush=True)
 
-                wav_ok, wav_reason = validate_generated_wav_file(output_path)
-                if not wav_ok:
-                    raise RuntimeError(f"wav invalido: {wav_reason}")
+                # Valida bytes em memória
+                buf = io.BytesIO(wav_bytes)
+                try:
+                    with wave.open(buf, "rb") as wav_check:
+                        channels = wav_check.getnchannels()
+                        sample_width = wav_check.getsampwidth()
+                        frame_rate = wav_check.getframerate()
+                        frame_count = wav_check.getnframes()
+                    
+                    if channels <= 0 or sample_width <= 0 or frame_rate <= 0 or frame_count <= 0:
+                        raise RuntimeError("wav invalido")
+                except Exception as exc:
+                    raise RuntimeError(f"wav invalido: {exc}")
 
                 print(f"[TTS] Piper selecionado: {os.path.basename(model_path)}", flush=True)
                 end_time = time.time()
-                print(f"[TTS] Síntese concluída (engine=piper) tempo={(end_time - start_time):.3f}s path=/mp3/tts-generated/{filename}", flush=True)
-                return f"/mp3/tts-generated/{filename}", "piper"
+                print(f"[TTS] Síntese concluída (engine=piper) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
+                
+                # Armazena em cache
+                add_to_tts_cache(cache_id, wav_bytes, "piper")
+                return cache_id, "piper"
             except Exception as exc:
                 print(f"[TTS] Exceção durante síntese: {type(exc).__name__}: {exc}", flush=True)
-                try:
-                    if os.path.exists(output_path):
-                        os.remove(output_path)
-                except OSError:
-                    pass
-
                 print(f"[TTS] Falha ao gerar audio com Piper ({model_path}): {exc}", flush=True)
 
         print("[TTS] Nenhum par modelo/json do Piper conseguiu sintetizar audio.", flush=True)
@@ -482,35 +548,25 @@ def generate_tts_audio(tts_text, tts_lang):
         print("[TTS] Piper indisponivel e gTTS nao esta instalado. Adicione piper-tts ou gTTS no ambiente.", flush=True)
         return "", ""
 
-    os.makedirs(GENERATED_TTS_DIR, exist_ok=True)
-    cleanup_generated_tts_files()
-
     lang = normalize_backend_tts_lang(tts_lang)
-    safe_model = "gtts"
-    snippet = text[:10]
-    safe_snippet = re.sub(r"[^A-Za-z0-9_-]", "_", snippet)
-    filename = f"{safe_model}-{safe_snippet}.mp3"
-    output_path = os.path.join(GENERATED_TTS_DIR, filename)
-
-    if os.path.exists(output_path):
-        filename = f"{safe_model}-{safe_snippet}-{uuid.uuid4().hex[:8]}.mp3"
-        output_path = os.path.join(GENERATED_TTS_DIR, filename)
-
+    
     try:
-        gtts_class(text=text, lang=lang).save(output_path)
+        mp3_buffer = io.BytesIO()
+        gtts_class(text=text, lang=lang).write_to_fp(mp3_buffer)
+        mp3_bytes = mp3_buffer.getvalue()
     except Exception as exc:
         try:
-            if os.path.exists(output_path):
-                os.remove(output_path)
-        except OSError:
+            print(f"[TTS] Falha ao gerar audio com fallback legacy ({lang}): {exc}", flush=True)
+        except:
             pass
-
-        print(f"[TTS] Falha ao gerar audio com fallback legacy ({lang}): {exc}", flush=True)
         return "", ""
 
     end_time = time.time()
-    print(f"[TTS] Síntese concluída (engine=gtts) tempo={(end_time - start_time):.3f}s path=/mp3/tts-generated/{filename}", flush=True)
-    return f"/mp3/tts-generated/{filename}", "gtts"
+    print(f"[TTS] Síntese concluída (engine=gtts) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
+    
+    # Armazena em cache
+    add_to_tts_cache(cache_id, mp3_bytes, "gtts")
+    return cache_id, "gtts"
 
 def attach_backend_tts_audio(event_payload):
     if not isinstance(event_payload, dict):
@@ -524,9 +580,9 @@ def attach_backend_tts_audio(event_payload):
     event_payload["tts_text"] = tts_text
     event_payload["tts_lang"] = tts_lang
 
-    tts_audio_url, tts_engine = generate_tts_audio(tts_text, tts_lang)
-    if tts_audio_url:
-        event_payload["tts_audio_url"] = tts_audio_url
+    cache_id, tts_engine = generate_tts_audio(tts_text, tts_lang)
+    if cache_id:
+        event_payload["tts_audio_url"] = f"/mp3/tts-cache/{cache_id}"
         event_payload["tts_engine"] = tts_engine
 
 def steam_target_steamid64():
@@ -1627,6 +1683,30 @@ def obs_powerup_audio_morreu_ogg():
 @app.route("/ogg/plol.ogg", methods=["GET"])
 def obs_powerup_audio_plol_ogg():
     return send_file_no_cache(OGG_DIR, "plol.ogg")
+
+@app.route("/mp3/tts-cache/<cache_id>", methods=["GET"])
+def serve_tts_audio(cache_id):
+    """Serve TTS audio from in-memory cache"""
+    audio_bytes, engine = get_from_tts_cache(cache_id)
+    if not audio_bytes:
+        print(f"[TTS-SERVE] Audio não encontrado ou expirado: {cache_id[:8]}...", flush=True)
+        return Response("Audio expired or not found", status=404)
+    
+    # Detecta tipo de arquivo baseado no engine
+    mimetype = "audio/mpeg" if engine == "gtts" else "audio/wav"
+    extension = ".mp3" if engine == "gtts" else ".wav"
+    
+    print(f"[TTS-SERVE] Servindo: {cache_id[:8]}... ({engine}, {len(audio_bytes)} bytes)", flush=True)
+    return Response(
+        audio_bytes,
+        mimetype=mimetype,
+        headers={
+            "Content-Disposition": f'inline; filename="audio{extension}"',
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
 
 @app.route("/mp3/<path:filename>", methods=["GET"])
 def mp3_assets(filename):
