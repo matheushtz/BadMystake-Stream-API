@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import sys
 import threading
 import ctypes
 from collections import OrderedDict
@@ -177,6 +178,66 @@ def log_tts_cache_stats(prefix="[TTS-CACHE]"):
         f"{prefix} items={stats['items']} size_mb={stats['size_mb']:.2f} ttl_seconds={stats['ttl_seconds']} max_single_bytes={stats['max_single_bytes']}",
         flush=True,
     )
+
+def get_all_memory_stats():
+    """Return comprehensive memory metrics for all API components."""
+    import sys
+    
+    memory_stats = get_process_memory_stats()
+    
+    # TTS Audio Cache
+    with TTS_AUDIO_CACHE_LOCK:
+        tts_cache_bytes = sum(len(audio_bytes) for audio_bytes, _, _ in TTS_AUDIO_CACHE.values())
+        tts_cache_items = len(TTS_AUDIO_CACHE)
+    
+    # POWERUP_EVENT_STATE
+    powerup_state_bytes = len(json.dumps(POWERUP_EVENT_STATE, ensure_ascii=False).encode('utf-8'))
+    
+    # LAST_EVENT_IDS (set of strings)
+    last_event_ids_bytes = sum(sys.getsizeof(event_id) for event_id in LAST_EVENT_IDS) + sys.getsizeof(LAST_EVENT_IDS)
+    last_event_ids_count = len(LAST_EVENT_IDS)
+    
+    # TTS_LAST_VOICE
+    tts_voice_bytes = sys.getsizeof(TTS_LAST_VOICE) + sum(sys.getsizeof(k) + sys.getsizeof(v) for k, v in TTS_LAST_VOICE.items())
+    
+    # Total in-memory data
+    total_managed_bytes = tts_cache_bytes + powerup_state_bytes + last_event_ids_bytes + tts_voice_bytes
+    
+    return {
+        "process": memory_stats,
+        "components": {
+            "tts_cache": {
+                "items": tts_cache_items,
+                "bytes": tts_cache_bytes,
+                "mb": round(tts_cache_bytes / (1024 * 1024), 2),
+                "ttl_seconds": TTS_AUDIO_CACHE_TTL_SECONDS,
+                "max_single_bytes": MAX_SINGLE_TTS_BYTES,
+                "max_total_mb": TTS_AUDIO_CACHE_MAX_SIZE_MB,
+            },
+            "powerup_event_state": {
+                "bytes": powerup_state_bytes,
+                "kb": round(powerup_state_bytes / 1024, 2),
+                "seq": POWERUP_EVENT_STATE["seq"],
+                "last_reward": POWERUP_EVENT_STATE["last_reward"],
+            },
+            "last_event_ids": {
+                "count": last_event_ids_count,
+                "bytes": last_event_ids_bytes,
+                "kb": round(last_event_ids_bytes / 1024, 2),
+                "max_count": MAX_EVENT_IDS,
+            },
+            "tts_last_voice": {
+                "bytes": tts_voice_bytes,
+                "kb": round(tts_voice_bytes / 1024, 2),
+                "data": TTS_LAST_VOICE,
+            },
+        },
+        "summary": {
+            "total_managed_mb": round(total_managed_bytes / (1024 * 1024), 2),
+            "total_managed_bytes": total_managed_bytes,
+            "process_rss_mb": memory_stats.get("rss_mb"),
+        },
+    }
 
 def start_tts_cache_monitor():
     global TTS_CACHE_MONITOR_ACTIVE
@@ -1795,25 +1856,8 @@ def twitch_powerup_state():
 
 @app.route("/debug/memory", methods=["GET"])
 def debug_memory():
-    """Return backend memory metrics and TTS cache usage."""
-    memory_stats = get_process_memory_stats()
-    tts_cache_stats = get_tts_cache_stats()
-    event_state_size = len(json.dumps(POWERUP_EVENT_STATE, ensure_ascii=False))
-
-    return {
-        "process": memory_stats,
-        "tts_cache": tts_cache_stats,
-        "event_state": {
-            "seq": POWERUP_EVENT_STATE["seq"],
-            "last_reward": POWERUP_EVENT_STATE["last_reward"],
-            "last_event_bytes": event_state_size,
-        },
-        "limits": {
-            "max_pending_event_ids": MAX_EVENT_IDS,
-            "max_single_tts_bytes": MAX_SINGLE_TTS_BYTES,
-            "tts_cache_max_size_mb": TTS_AUDIO_CACHE_MAX_SIZE_MB,
-        },
-    }, 200
+    """Return comprehensive backend memory metrics for all API components."""
+    return get_all_memory_stats(), 200
 
 # Endpoint de teste manual para validar o listener sem depender da Twitch.
 @app.route("/twitch/powerup/test", methods=["GET", "POST"])
