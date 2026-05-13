@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import threading
+import ctypes
 from collections import OrderedDict
 # Prevent ONNXRuntime from probing GPU devices in environments without drivers.
 # This suppresses warnings like: Failed to detect devices under "/sys/class/drm/card0"
@@ -77,6 +78,138 @@ TTS_AUDIO_CACHE = OrderedDict()
 TTS_AUDIO_CACHE_MAX_SIZE_MB = 100
 TTS_AUDIO_CACHE_TTL_SECONDS = 60  # 1 minuto
 TTS_AUDIO_CACHE_LOCK = threading.Lock()
+MAX_SINGLE_TTS_BYTES = 50 * 1024 * 1024  # 50 MB per item safety cap
+# Track last-used voices to avoid repeating the same voice consecutively
+TTS_LAST_VOICE = {
+    "piper": None,
+    "gtts": None,
+}
+TTS_CACHE_MONITOR_LOCK = threading.Lock()
+TTS_CACHE_MONITOR_ACTIVE = False
+
+def get_process_memory_stats():
+    """Return process memory stats in MB when possible."""
+    stats = {
+        "rss_mb": None,
+        "vms_mb": None,
+        "source": "unknown",
+    }
+
+    try:
+        psutil_module = importlib.import_module("psutil")
+        process = psutil_module.Process(os.getpid())
+        mem_info = process.memory_info()
+        stats["rss_mb"] = round(mem_info.rss / (1024 * 1024), 2)
+        stats["vms_mb"] = round(mem_info.vms / (1024 * 1024), 2) if hasattr(mem_info, "vms") else None
+        stats["source"] = "psutil"
+        return stats
+    except Exception:
+        pass
+
+    if os.name == "nt":
+        try:
+            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", ctypes.c_ulong),
+                    ("PageFaultCount", ctypes.c_ulong),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = PROCESS_MEMORY_COUNTERS()
+            counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            psapi = ctypes.WinDLL("psapi", use_last_error=True)
+
+            kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+            psapi.GetProcessMemoryInfo.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(PROCESS_MEMORY_COUNTERS),
+                ctypes.c_ulong,
+            ]
+            psapi.GetProcessMemoryInfo.restype = ctypes.c_bool
+
+            handle = kernel32.GetCurrentProcess()
+            result = psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
+            if result:
+                stats["rss_mb"] = round(counters.WorkingSetSize / (1024 * 1024), 2)
+                stats["vms_mb"] = round(counters.PagefileUsage / (1024 * 1024), 2)
+                stats["source"] = "ctypes-windows"
+                return stats
+        except Exception:
+            pass
+
+    try:
+        import resource
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        rss_kb = getattr(usage, "ru_maxrss", 0)
+        if rss_kb:
+            # On Linux this is KB, on macOS it is bytes. Convert conservatively.
+            rss_mb = rss_kb / 1024.0
+            if rss_mb > 1024 * 1024:
+                rss_mb = rss_kb / (1024.0 * 1024.0)
+            stats["rss_mb"] = round(rss_mb, 2)
+            stats["source"] = "resource"
+    except Exception:
+        pass
+
+    return stats
+
+def get_tts_cache_stats():
+    with TTS_AUDIO_CACHE_LOCK:
+        total_size_bytes = sum(len(audio_bytes) for audio_bytes, _, _ in TTS_AUDIO_CACHE.values())
+        return {
+            "items": len(TTS_AUDIO_CACHE),
+            "size_mb": round(total_size_bytes / (1024 * 1024), 2),
+            "ttl_seconds": TTS_AUDIO_CACHE_TTL_SECONDS,
+            "max_single_bytes": MAX_SINGLE_TTS_BYTES,
+        }
+
+def log_tts_cache_stats(prefix="[TTS-CACHE]"):
+    stats = get_tts_cache_stats()
+    print(
+        f"{prefix} items={stats['items']} size_mb={stats['size_mb']:.2f} ttl_seconds={stats['ttl_seconds']} max_single_bytes={stats['max_single_bytes']}",
+        flush=True,
+    )
+
+def start_tts_cache_monitor():
+    global TTS_CACHE_MONITOR_ACTIVE
+
+    with TTS_CACHE_MONITOR_LOCK:
+        if TTS_CACHE_MONITOR_ACTIVE:
+            return
+        TTS_CACHE_MONITOR_ACTIVE = True
+
+    def _monitor():
+        global TTS_CACHE_MONITOR_ACTIVE
+        try:
+            log_tts_cache_stats("[TTS-CACHE][MONITOR] start")
+
+            while True:
+                cleanup_expired_tts_cache()
+                stats = get_tts_cache_stats()
+                print(
+                    f"[TTS-CACHE][MONITOR] items={stats['items']} size_mb={stats['size_mb']:.2f} ttl_seconds={stats['ttl_seconds']} max_single_bytes={stats['max_single_bytes']}",
+                    flush=True,
+                )
+
+                if stats["items"] <= 0:
+                    break
+
+                time.sleep(1)
+        finally:
+            with TTS_CACHE_MONITOR_LOCK:
+                TTS_CACHE_MONITOR_ACTIVE = False
+            print("[TTS-CACHE][MONITOR] stopped", flush=True)
+
+    thread = threading.Thread(target=_monitor, name="tts-cache-monitor", daemon=True)
+    thread.start()
 
 def get_configured_tts_speed(model_name=None):
     speed = DEFAULT_TTS_SPEED
@@ -276,9 +409,10 @@ def normalize_backend_tts_lang(tts_lang):
 
     return normalized
 
-def get_tts_cache_id(text, engine="piper"):
-    """Gera ID único para cache de áudio TTS"""
-    key = f"{text}_{engine}".encode('utf-8')
+def get_tts_cache_id(text, engine="piper", voice=None):
+    """Gera ID único para cache de áudio TTS incluindo engine e voz"""
+    v = voice or ""
+    key = f"{text}_{engine}_{v}".encode('utf-8')
     return hashlib.sha256(key).hexdigest()
 
 def cleanup_expired_tts_cache():
@@ -298,7 +432,16 @@ def cleanup_expired_tts_cache():
 def add_to_tts_cache(cache_id, audio_bytes, engine):
     """Adiciona áudio ao cache com proteção de tamanho máximo"""
     cleanup_expired_tts_cache()
-    
+    # Safety: refuse to cache absurdly large single items
+    try:
+        size_bytes = len(audio_bytes)
+    except Exception:
+        size_bytes = 0
+
+    if size_bytes > MAX_SINGLE_TTS_BYTES:
+        print(f"[TTS-CACHE] Arquivo muito grande para cache ({size_bytes} bytes), não armazenado: {cache_id[:8]}...", flush=True)
+        return False
+
     with TTS_AUDIO_CACHE_LOCK:
         # Remove se já existe (reinsert no final da OrderedDict)
         if cache_id in TTS_AUDIO_CACHE:
@@ -318,6 +461,7 @@ def add_to_tts_cache(cache_id, audio_bytes, engine):
             print(f"[TTS-CACHE] Removido (limite): {old_id[:8]}...", flush=True)
         
         print(f"[TTS-CACHE] Adicionado: {cache_id[:8]}... (tamanho={len(audio_bytes)/1024:.1f}KB, cache_total={total_size_mb:.1f}MB)", flush=True)
+    return True
 
 def get_from_tts_cache(cache_id):
     """Recupera áudio do cache"""
@@ -374,6 +518,13 @@ def pick_random_piper_voice_pair():
     pairs = get_piper_voice_pairs()
     if not pairs:
         return None, None
+
+    # Prefer a random voice that is not the one used last time (if possible)
+    last = TTS_LAST_VOICE.get("piper")
+    if last:
+        others = [p for p in pairs if os.path.basename(p[0]) != last]
+        if others:
+            return random.choice(others)
 
     return random.choice(pairs)
 
@@ -473,26 +624,37 @@ def generate_tts_audio(tts_text, tts_lang):
 
     print(f"[TTS] Texto normalizado para sintetiza: '{text}' (len={len(text)})", flush=True)
 
-    cache_id = get_tts_cache_id(text)
-    cached_bytes, cached_engine = get_from_tts_cache(cache_id)
-    if cached_bytes:
-        print(f"[TTS] Usando áudio em cache: {cache_id[:8]}...", flush=True)
-        return cache_id, cached_engine
-
     piper_pairs = get_piper_voice_pairs()
-    random.shuffle(piper_pairs)
 
     if get_piper_voice_class() is not None and piper_pairs:
-        for model_path, config_path in piper_pairs:
+        # Build prioritized list avoiding last-used voice when possible
+        last = TTS_LAST_VOICE.get("piper")
+        prioritized = [p for p in piper_pairs if os.path.basename(p[0]) != last]
+        remaining = [p for p in piper_pairs if os.path.basename(p[0]) == last]
+        random.shuffle(prioritized)
+        random.shuffle(remaining)
+        ordered_pairs = prioritized + remaining
+
+        for model_path, config_path in ordered_pairs:
+            model_name = os.path.splitext(os.path.basename(model_path))[0]
+            # Check cache per text+engine+voice
+            cache_id = get_tts_cache_id(text, engine="piper", voice=model_name)
+            cached_bytes, cached_engine = get_from_tts_cache(cache_id)
+            if cached_bytes:
+                print(f"[TTS] Usando áudio em cache: {cache_id[:8]}... (voice={model_name})", flush=True)
+                # record last-used
+                TTS_LAST_VOICE["piper"] = os.path.basename(model_path)
+                return cache_id, cached_engine
+
             try:
                 print(f"[TTS] Tentando modelo: {os.path.basename(model_path)}", flush=True)
                 voice = load_piper_voice(model_path, config_path)
-                
+
                 syn_config = get_synthesis_config()
                 if syn_config is None:
                     raise RuntimeError("SynthesisConfig indisponivel")
                 
-                # extrai nome do modelo para log
+                # extrai nome do modelo para log (re-assign to ensure correct value)
                 model_name = os.path.splitext(os.path.basename(model_path))[0]
                 configured_speed = apply_piper_tts_speed(syn_config, model_name)
                 print(f"[TTS] Velocidade configurada (modelo={model_name}, tts_speed={configured_speed})", flush=True)
@@ -535,7 +697,10 @@ def generate_tts_audio(tts_text, tts_lang):
                 print(f"[TTS] Síntese concluída (engine=piper) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
                 
                 # Armazena em cache
-                add_to_tts_cache(cache_id, wav_bytes, "piper")
+                if add_to_tts_cache(cache_id, wav_bytes, "piper"):
+                    start_tts_cache_monitor()
+                # mark last-used voice
+                TTS_LAST_VOICE["piper"] = os.path.basename(model_path)
                 return cache_id, "piper"
             except Exception as exc:
                 print(f"[TTS] Exceção durante síntese: {type(exc).__name__}: {exc}", flush=True)
@@ -565,22 +730,33 @@ def generate_tts_audio(tts_text, tts_lang):
     print(f"[TTS] Síntese concluída (engine=gtts) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
     
     # Armazena em cache
-    add_to_tts_cache(cache_id, mp3_bytes, "gtts")
+    if add_to_tts_cache(cache_id, mp3_bytes, "gtts"):
+        start_tts_cache_monitor()
     return cache_id, "gtts"
 
 def attach_backend_tts_audio(event_payload):
     if not isinstance(event_payload, dict):
         return
-
+    # Compose TTS text, prefixing with the redeemer's username if available
     tts_text = normalize_tts_text(event_payload.get("tts_text", ""))
-    if not tts_text:
+    user_name = normalize_tts_text(event_payload.get("user_name", ""))
+    if not tts_text and not user_name:
         return
 
+    if user_name:
+        # Format: "usuario123 disse: mensagem"
+        composed = f"{user_name} disse: {tts_text}" if tts_text else f"{user_name} disse:"
+    else:
+        composed = tts_text
+
+    # Re-normalize to enforce length limits
+    composed = normalize_tts_text(composed)
+
     tts_lang = event_payload.get("tts_lang") or get_first_env("TWITCH_TTS_LANG") or "pt-BR"
-    event_payload["tts_text"] = tts_text
+    event_payload["tts_text"] = composed
     event_payload["tts_lang"] = tts_lang
 
-    cache_id, tts_engine = generate_tts_audio(tts_text, tts_lang)
+    cache_id, tts_engine = generate_tts_audio(composed, tts_lang)
     if cache_id:
         event_payload["tts_audio_url"] = f"/mp3/tts-cache/{cache_id}"
         event_payload["tts_engine"] = tts_engine
@@ -909,13 +1085,16 @@ def mark_powerup_trigger(event_payload):
     
     POWERUP_EVENT_STATE["last_event"] = event_payload
 
-def trigger_powerup_test(label="TESTE", tts_text=None):
+def trigger_powerup_test(label="TESTE", tts_text=None, user_name=None):
     event_payload = {
         "reward": {
             "title": label,
         },
         "source": "powerup-test",
     }
+
+    if user_name:
+        event_payload["user_name"] = user_name
 
     if tts_text:
         event_payload["tts_text"] = normalize_tts_text(tts_text)
@@ -1614,12 +1793,35 @@ def twitch_powerup_state():
         "last_event": POWERUP_EVENT_STATE["last_event"],
     }, 200
 
+@app.route("/debug/memory", methods=["GET"])
+def debug_memory():
+    """Return backend memory metrics and TTS cache usage."""
+    memory_stats = get_process_memory_stats()
+    tts_cache_stats = get_tts_cache_stats()
+    event_state_size = len(json.dumps(POWERUP_EVENT_STATE, ensure_ascii=False))
+
+    return {
+        "process": memory_stats,
+        "tts_cache": tts_cache_stats,
+        "event_state": {
+            "seq": POWERUP_EVENT_STATE["seq"],
+            "last_reward": POWERUP_EVENT_STATE["last_reward"],
+            "last_event_bytes": event_state_size,
+        },
+        "limits": {
+            "max_pending_event_ids": MAX_EVENT_IDS,
+            "max_single_tts_bytes": MAX_SINGLE_TTS_BYTES,
+            "tts_cache_max_size_mb": TTS_AUDIO_CACHE_MAX_SIZE_MB,
+        },
+    }, 200
+
 # Endpoint de teste manual para validar o listener sem depender da Twitch.
 @app.route("/twitch/powerup/test", methods=["GET", "POST"])
 def twitch_powerup_test():
     label = request.args.get("label") or request.form.get("label") or "TESTE"
     text = request.args.get("text") or request.form.get("text") or ""
-    trigger_powerup_test(label, text)
+    # For manual testing, pretend the redeemer username is 'torneirinha'
+    trigger_powerup_test(label, text, user_name="torneirinha")
     return {
         "status": "ok",
         "message": "powerup test triggered",
@@ -1653,16 +1855,30 @@ def obs_powerup_styles():
     return send_file_no_cache(CSS_DIR, "obs_powerup.css")
 
 # Webpage para OBS: roleta/torchlight
+TORCHLIGHT_ROULETTE_ENABLED = False
+
+def _torchlight_roleta_disabled_response():
+    return {
+        "ok": False,
+        "error": "torchlight roleta desativada temporariamente",
+    }, 410
+
 @app.route("/torchlight/roleta/obs", methods=["GET"])
 def obs_roleta_page():
+    if not TORCHLIGHT_ROULETTE_ENABLED:
+        return _torchlight_roleta_disabled_response()
     return send_file_no_cache(HTML_DIR, "torchlight_roleta_obs.html")
 
 @app.route("/torchlight/roleta/obs.js", methods=["GET"])
 def obs_roleta_script():
+    if not TORCHLIGHT_ROULETTE_ENABLED:
+        return _torchlight_roleta_disabled_response()
     return send_file_no_cache(JS_DIR, "torchlight_roleta_obs.js")
 
 @app.route("/torchlight/roleta/obs.css", methods=["GET"])
 def obs_roleta_styles():
+    if not TORCHLIGHT_ROULETTE_ENABLED:
+        return _torchlight_roleta_disabled_response()
     return send_file_no_cache(CSS_DIR, "torchlight_roleta_obs.css")
 # Arquivo de audio para a webpage do OBS.
 @app.route("/obs/nossa.mp3", methods=["GET"])
@@ -1687,16 +1903,25 @@ def obs_powerup_audio_plol_ogg():
 @app.route("/mp3/tts-cache/<cache_id>", methods=["GET"])
 def serve_tts_audio(cache_id):
     """Serve TTS audio from in-memory cache"""
-    audio_bytes, engine = get_from_tts_cache(cache_id)
-    if not audio_bytes:
+    # Pop the entry so it's removed after being served (one-time play)
+    with TTS_AUDIO_CACHE_LOCK:
+        entry = TTS_AUDIO_CACHE.pop(cache_id, None)
+
+    if not entry:
         print(f"[TTS-SERVE] Audio não encontrado ou expirado: {cache_id[:8]}...", flush=True)
         return Response("Audio expired or not found", status=404)
-    
+
+    audio_bytes, engine, timestamp = entry
+    age = time.time() - timestamp
+    if age > TTS_AUDIO_CACHE_TTL_SECONDS:
+        print(f"[TTS-SERVE] Audio expirado antes de servir: {cache_id[:8]}... (age={age:.1f}s)", flush=True)
+        return Response("Audio expired or not found", status=404)
+
     # Detecta tipo de arquivo baseado no engine
     mimetype = "audio/mpeg" if engine == "gtts" else "audio/wav"
     extension = ".mp3" if engine == "gtts" else ".wav"
-    
-    print(f"[TTS-SERVE] Servindo: {cache_id[:8]}... ({engine}, {len(audio_bytes)} bytes)", flush=True)
+
+    print(f"[TTS-SERVE] Servindo (one-time): {cache_id[:8]}... ({engine}, {len(audio_bytes)} bytes)", flush=True)
     return Response(
         audio_bytes,
         mimetype=mimetype,

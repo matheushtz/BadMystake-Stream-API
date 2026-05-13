@@ -9,7 +9,8 @@ var activeAudioPath = null;
 
 var listaPedidos = [];
 var stateUrl = "/twitch/powerup/state";
-var pollIntervalMs = 600;
+// Poll interval in milliseconds. Increase to reduce CPU/network and lower backlog risk.
+var pollIntervalMs = 2000; // was 600
 var lastSeq = null;
 
 var REWARD_AUDIO_MAP = {
@@ -137,6 +138,7 @@ function buildSoundPath(pedido) {
     return null;
 }
 
+var MAX_PENDING_REQUESTS = 50; // cap pending events to avoid unbounded memory growth
 function buildTtsText(pedido) {
     if (!pedido || typeof pedido !== "object") {
         return "";
@@ -525,7 +527,8 @@ async function lista() {
                 await sleepTime(audioMs);
             }
         } else {
-            await sleepTime(700);
+            // when idle, wait longer to reduce polling pressure
+            await sleepTime(2000);
         }
     }
 }
