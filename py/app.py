@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import threading
+import queue
 import ctypes
 from collections import OrderedDict
 # Prevent ONNXRuntime from probing GPU devices in environments without drivers.
@@ -73,6 +74,45 @@ MAX_TTS_SPEED = 2.0
 MAX_TTS_FILE_AGE_SECONDS = 20 * 60
 MAX_TTS_FILE_COUNT = 5
 MAX_TTS_INPUT_CHARS = int(os.environ.get("TWITCH_TTS_MAX_INPUT_CHARS", "200"))
+MAX_CONCURRENT_SYNTHS = int(os.environ.get("TWITCH_TTS_MAX_CONCURRENT_SYNTHS", "1"))
+
+# Background queue for async TTS synth jobs
+TTS_JOB_QUEUE = queue.Queue()
+TTS_WORKERS_STARTED = False
+
+def start_tts_workers():
+    global TTS_WORKERS_STARTED
+    if TTS_WORKERS_STARTED:
+        return
+
+    def worker_loop(worker_id):
+        print(f"[TTS-WORKER] started #{worker_id}", flush=True)
+        while True:
+            job = TTS_JOB_QUEUE.get()
+            if job is None:
+                TTS_JOB_QUEUE.task_done()
+                break
+
+            cache_id = job.get("cache_id")
+            text = job.get("text")
+            tts_lang = job.get("tts_lang")
+
+            print(f"[TTS-WORKER] #{worker_id} processing cache_id={cache_id[:8]}...", flush=True)
+            try:
+                # perform synchronous synthesis and store in cache
+                _run_synthesis_job(cache_id, text, tts_lang)
+            except MemoryError as me:
+                print(f"[TTS-WORKER] MemoryError during synthesis: {me}", flush=True)
+            except Exception as exc:
+                print(f"[TTS-WORKER] Exception during synthesis: {type(exc).__name__}: {exc}", flush=True)
+            finally:
+                TTS_JOB_QUEUE.task_done()
+
+    for i in range(max(1, MAX_CONCURRENT_SYNTHS)):
+        t = threading.Thread(target=worker_loop, args=(i+1,), daemon=True)
+        t.start()
+
+    TTS_WORKERS_STARTED = True
 
 # TTS Audio Cache em memória (sem disco para compatibilidade com Render/serverless)
 # Estrutura: {cache_id: (audio_bytes, engine, timestamp)}
@@ -172,6 +212,107 @@ def get_tts_cache_stats():
             "ttl_seconds": TTS_AUDIO_CACHE_TTL_SECONDS,
             "max_single_bytes": MAX_SINGLE_TTS_BYTES,
         }
+
+def enqueue_tts_synthesis(cache_id, text, tts_lang):
+    # Ensure workers are running
+    start_tts_workers()
+    job = {"cache_id": cache_id, "text": text, "tts_lang": tts_lang}
+    try:
+        TTS_JOB_QUEUE.put(job, block=False)
+        print(f"[TTS] Job enqueued: {cache_id[:8]}...", flush=True)
+        return True
+    except Exception as exc:
+        print(f"[TTS] Falha ao enfileirar job: {exc}", flush=True)
+        return False
+
+def _run_synthesis_job(cache_id, text, tts_lang):
+    """Internal: run the actual synthesis logic similar to previous generate_tts_audio."""
+    start_time = time.time()
+    # reuse much of the original synchronous synthesis flow
+    piper_pairs = get_piper_voice_pairs()
+
+    if get_piper_voice_class() is not None and piper_pairs:
+        # Build prioritized list avoiding last-used voice when possible
+        last = TTS_LAST_VOICE.get("piper")
+        prioritized = [p for p in piper_pairs if os.path.basename(p[0]) != last]
+        remaining = [p for p in piper_pairs if os.path.basename(p[0]) == last]
+        random.shuffle(prioritized)
+        random.shuffle(remaining)
+        ordered_pairs = prioritized + remaining
+
+        for model_path, config_path in ordered_pairs:
+            try:
+                print(f"[TTS-WORKER] Tentando modelo: {os.path.basename(model_path)}", flush=True)
+                voice = load_piper_voice(model_path, config_path)
+
+                syn_config = get_synthesis_config()
+                if syn_config is None:
+                    raise RuntimeError("SynthesisConfig indisponivel")
+
+                model_name = os.path.splitext(os.path.basename(model_path))[0]
+                configured_speed = apply_piper_tts_speed(syn_config, model_name)
+                print(f"[TTS-WORKER] Velocidade configurada (modelo={model_name}, tts_speed={configured_speed})", flush=True)
+
+                wav_buffer = io.BytesIO()
+                with wave.open(wav_buffer, "wb") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(voice.config.sample_rate)
+
+                    print(f"[TTS-WORKER] Iniciando síntese com voice.synthesize()...", flush=True)
+                    chunk_count = 0
+                    for chunk in voice.synthesize(text, syn_config):
+                        chunk_count += 1
+                        wav_file.writeframes(chunk.audio_int16_bytes)
+
+                    print(f"[TTS-WORKER] Síntese completa: {chunk_count} chunks escritos", flush=True)
+
+                wav_bytes = wav_buffer.getvalue()
+                wav_size = len(wav_bytes)
+                print(f"[TTS-WORKER] Áudio WAV em memória: {wav_size} bytes", flush=True)
+
+                # validate
+                buf = io.BytesIO(wav_bytes)
+                try:
+                    with wave.open(buf, "rb") as wav_check:
+                        channels = wav_check.getnchannels()
+                        sample_width = wav_check.getsampwidth()
+                        frame_rate = wav_check.getframerate()
+                        frame_count = wav_check.getnframes()
+
+                    if channels <= 0 or sample_width <= 0 or frame_rate <= 0 or frame_count <= 0:
+                        raise RuntimeError("wav invalido")
+                except Exception as exc:
+                    raise RuntimeError(f"wav invalido: {exc}")
+
+                print(f"[TTS-WORKER] Piper selecionado: {os.path.basename(model_path)}", flush=True)
+                end_time = time.time()
+                print(f"[TTS-WORKER] Síntese concluída (engine=piper) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
+
+                add_to_tts_cache(cache_id, wav_bytes, "piper")
+                TTS_LAST_VOICE["piper"] = os.path.basename(model_path)
+                return
+            except Exception as exc:
+                print(f"[TTS-WORKER] Exceção durante síntese com Piper: {type(exc).__name__}: {exc}", flush=True)
+
+    # fallback to gTTS
+    gtts_class = get_gtts_class()
+    if gtts_class is None:
+        print("[TTS-WORKER] Piper indisponivel e gTTS nao esta instalado.", flush=True)
+        return
+
+    lang = normalize_backend_tts_lang(tts_lang)
+    try:
+        mp3_buffer = io.BytesIO()
+        gtts_class(text=text, lang=lang).write_to_fp(mp3_buffer)
+        mp3_bytes = mp3_buffer.getvalue()
+    except Exception as exc:
+        print(f"[TTS-WORKER] Falha ao gerar audio com gTTS: {exc}", flush=True)
+        return
+
+    end_time = time.time()
+    print(f"[TTS-WORKER] Síntese concluída (engine=gtts) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
+    add_to_tts_cache(cache_id, mp3_bytes, "gtts")
 
 def log_tts_cache_stats(prefix="[TTS-CACHE]"):
     stats = get_tts_cache_stats()
@@ -823,10 +964,17 @@ def attach_backend_tts_audio(event_payload):
     event_payload["tts_text"] = composed
     event_payload["tts_lang"] = tts_lang
 
-    cache_id, tts_engine = generate_tts_audio(composed, tts_lang)
-    if cache_id:
+    # Check cache first; if missing, enqueue background synthesis and return 202-style pending URL
+    cache_id = get_tts_cache_id(composed, engine="piper")
+    cached_bytes, cached_engine = get_from_tts_cache(cache_id)
+    if cached_bytes:
         event_payload["tts_audio_url"] = f"/mp3/tts-cache/{cache_id}"
-        event_payload["tts_engine"] = tts_engine
+        event_payload["tts_engine"] = cached_engine
+    else:
+        # enqueue background job; frontend may poll the URL until audio is available
+        enqueued = enqueue_tts_synthesis(cache_id, composed, tts_lang)
+        event_payload["tts_audio_url"] = f"/mp3/tts-cache/{cache_id}"
+        event_payload["tts_engine"] = "pending" if enqueued else "error"
 
 def steam_target_steamid64():
     return get_first_env("STEAM_TARGET_STEAMID64")
