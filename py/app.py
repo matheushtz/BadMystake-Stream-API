@@ -73,7 +73,7 @@ MIN_TTS_SPEED = 0.5
 MAX_TTS_SPEED = 2.0
 MAX_TTS_FILE_AGE_SECONDS = 20 * 60
 MAX_TTS_FILE_COUNT = 5
-MAX_TTS_INPUT_CHARS = int(os.environ.get("TWITCH_TTS_MAX_INPUT_CHARS", "200"))
+MAX_TTS_INPUT_CHARS = int(os.environ.get("TWITCH_TTS_MAX_INPUT_CHARS", "250"))
 MAX_CONCURRENT_SYNTHS = int(os.environ.get("TWITCH_TTS_MAX_CONCURRENT_SYNTHS", "1"))
 
 # Background queue for async TTS synth jobs
