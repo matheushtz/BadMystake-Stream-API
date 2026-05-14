@@ -72,6 +72,7 @@ MIN_TTS_SPEED = 0.5
 MAX_TTS_SPEED = 2.0
 MAX_TTS_FILE_AGE_SECONDS = 20 * 60
 MAX_TTS_FILE_COUNT = 5
+MAX_TTS_INPUT_CHARS = int(os.environ.get("TWITCH_TTS_MAX_INPUT_CHARS", "200"))
 
 # TTS Audio Cache em memória (sem disco para compatibilidade com Render/serverless)
 # Estrutura: {cache_id: (audio_bytes, engine, timestamp)}
@@ -679,7 +680,8 @@ def validate_generated_wav_file(wav_path):
 
 def generate_tts_audio(tts_text, tts_lang):
     start_time = time.time()
-    text = normalize_tts_text(tts_text)
+    # Enforce same hard cap here as a safety net
+    text = normalize_tts_text(tts_text, max_length=MAX_TTS_INPUT_CHARS)
     if not text:
         return "", ""
 
@@ -810,8 +812,12 @@ def attach_backend_tts_audio(event_payload):
     else:
         composed = tts_text
 
-    # Re-normalize to enforce length limits
-    composed = normalize_tts_text(composed)
+    # Re-normalize and enforce a hard per-input character cap to avoid OOM
+    original_len = len(str(composed or ""))
+    composed = normalize_tts_text(composed, max_length=MAX_TTS_INPUT_CHARS)
+    if original_len > len(composed):
+        print(f"[TTS] Texto truncado de {original_len} para {len(composed)} caracteres para evitar OOM", flush=True)
+        event_payload["tts_truncated"] = True
 
     tts_lang = event_payload.get("tts_lang") or get_first_env("TWITCH_TTS_LANG") or "pt-BR"
     event_payload["tts_text"] = composed
