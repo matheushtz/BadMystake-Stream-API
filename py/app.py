@@ -107,6 +107,20 @@ def start_tts_workers():
                 print(f"[TTS-WORKER] Exception during synthesis: {type(exc).__name__}: {exc}", flush=True)
             finally:
                 TTS_JOB_QUEUE.task_done()
+                # If worker finished but did not store a ready result, mark as failed
+                try:
+                    with TTS_AUDIO_CACHE_LOCK:
+                        entry = TTS_AUDIO_CACHE.get(cache_id)
+                        if not entry:
+                            TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time())
+                            print(f"[TTS-WORKER] Marked failed (no entry): {cache_id[:8]}...", flush=True)
+                        else:
+                            _, engine_state, _ = entry
+                            if engine_state == "pending":
+                                TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time())
+                                print(f"[TTS-WORKER] Marked failed (still pending): {cache_id[:8]}...", flush=True)
+                except Exception:
+                    pass
 
     for i in range(max(1, MAX_CONCURRENT_SYNTHS)):
         t = threading.Thread(target=worker_loop, args=(i+1,), daemon=True)
@@ -118,7 +132,9 @@ def start_tts_workers():
 # Estrutura: {cache_id: (audio_bytes, engine, timestamp)}
 TTS_AUDIO_CACHE = OrderedDict()
 TTS_AUDIO_CACHE_MAX_SIZE_MB = 100
-TTS_AUDIO_CACHE_TTL_SECONDS = 60  # 1 minuto
+TTS_AUDIO_CACHE_TTL_SECONDS = 90  # 90 segundos
+TTS_AUDIO_PENDING_WAIT_SECONDS = 60
+TTS_AUDIO_PENDING_POLL_INTERVAL_SECONDS = 0.25
 TTS_AUDIO_CACHE_LOCK = threading.Lock()
 MAX_SINGLE_TTS_BYTES = 50 * 1024 * 1024  # 50 MB per item safety cap
 # Track last-used voices to avoid repeating the same voice consecutively
@@ -217,12 +233,25 @@ def enqueue_tts_synthesis(cache_id, text, tts_lang):
     # Ensure workers are running
     start_tts_workers()
     job = {"cache_id": cache_id, "text": text, "tts_lang": tts_lang}
+    # create a pending marker in cache so callers know work is in progress
+    with TTS_AUDIO_CACHE_LOCK:
+        if cache_id in TTS_AUDIO_CACHE:
+            # refresh timestamp/state
+            _, prev_engine, _ = TTS_AUDIO_CACHE[cache_id]
+            TTS_AUDIO_CACHE[cache_id] = (b"", "pending", time.time())
+        else:
+            TTS_AUDIO_CACHE[cache_id] = (b"", "pending", time.time())
+
     try:
         TTS_JOB_QUEUE.put(job, block=False)
         print(f"[TTS] Job enqueued: {cache_id[:8]}...", flush=True)
+        start_tts_cache_monitor()
         return True
     except Exception as exc:
         print(f"[TTS] Falha ao enfileirar job: {exc}", flush=True)
+        # mark failed
+        with TTS_AUDIO_CACHE_LOCK:
+            TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time())
         return False
 
 def _run_synthesis_job(cache_id, text, tts_lang):
@@ -642,7 +671,12 @@ def add_to_tts_cache(cache_id, audio_bytes, engine):
         size_bytes = 0
 
     if size_bytes > MAX_SINGLE_TTS_BYTES:
-        print(f"[TTS-CACHE] Arquivo muito grande para cache ({size_bytes} bytes), não armazenado: {cache_id[:8]}...", flush=True)
+        print(f"[TTS-CACHE] Arquivo muito grande para cache ({size_bytes} bytes), registrando falha: {cache_id[:8]}...", flush=True)
+        # store a failed marker so clients receive deterministic error
+        with TTS_AUDIO_CACHE_LOCK:
+            if cache_id in TTS_AUDIO_CACHE:
+                del TTS_AUDIO_CACHE[cache_id]
+            TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time())
         return False
 
     with TTS_AUDIO_CACHE_LOCK:
@@ -676,7 +710,12 @@ def get_from_tts_cache(cache_id):
                 del TTS_AUDIO_CACHE[cache_id]
                 print(f"[TTS-CACHE] Expirado durante acesso: {cache_id[:8]}...", flush=True)
                 return None, None
-            
+            # special-state entries
+            if engine == "pending":
+                return None, "pending"
+            if engine == "failed":
+                return None, "failed"
+
             print(f"[TTS-CACHE] Hit: {cache_id[:8]}... (idade={age:.1f}s, engine={engine})", flush=True)
             return audio_bytes, engine
     
@@ -971,10 +1010,18 @@ def attach_backend_tts_audio(event_payload):
         event_payload["tts_audio_url"] = f"/mp3/tts-cache/{cache_id}"
         event_payload["tts_engine"] = cached_engine
     else:
-        # enqueue background job; frontend may poll the URL until audio is available
-        enqueued = enqueue_tts_synthesis(cache_id, composed, tts_lang)
-        event_payload["tts_audio_url"] = f"/mp3/tts-cache/{cache_id}"
-        event_payload["tts_engine"] = "pending" if enqueued else "error"
+        # If cache reports pending/failed, propagate that state without enqueuing again
+        if cached_engine == "pending":
+            event_payload["tts_audio_url"] = f"/mp3/tts-cache/{cache_id}"
+            event_payload["tts_engine"] = "pending"
+        elif cached_engine == "failed":
+            event_payload["tts_audio_url"] = f"/mp3/tts-cache/{cache_id}"
+            event_payload["tts_engine"] = "error"
+        else:
+            # enqueue background job; frontend may poll the URL until audio is available
+            enqueued = enqueue_tts_synthesis(cache_id, composed, tts_lang)
+            event_payload["tts_audio_url"] = f"/mp3/tts-cache/{cache_id}"
+            event_payload["tts_engine"] = "pending" if enqueued else "error"
 
 def steam_target_steamid64():
     return get_first_env("STEAM_TARGET_STEAMID64")
@@ -2101,19 +2148,48 @@ def obs_powerup_audio_plol_ogg():
 @app.route("/mp3/tts-cache/<cache_id>", methods=["GET"])
 def serve_tts_audio(cache_id):
     """Serve TTS audio from in-memory cache"""
-    # Pop the entry so it's removed after being served (one-time play)
-    with TTS_AUDIO_CACHE_LOCK:
-        entry = TTS_AUDIO_CACHE.pop(cache_id, None)
+    deadline = time.time() + TTS_AUDIO_PENDING_WAIT_SECONDS
 
-    if not entry:
-        print(f"[TTS-SERVE] Audio não encontrado ou expirado: {cache_id[:8]}...", flush=True)
-        return Response("Audio expired or not found", status=404)
+    while True:
+        with TTS_AUDIO_CACHE_LOCK:
+            entry = TTS_AUDIO_CACHE.get(cache_id)
 
-    audio_bytes, engine, timestamp = entry
-    age = time.time() - timestamp
-    if age > TTS_AUDIO_CACHE_TTL_SECONDS:
-        print(f"[TTS-SERVE] Audio expirado antes de servir: {cache_id[:8]}... (age={age:.1f}s)", flush=True)
-        return Response("Audio expired or not found", status=404)
+        if not entry:
+            print(f"[TTS-SERVE] Audio não encontrado ou expirado: {cache_id[:8]}...", flush=True)
+            return Response("Audio expired or not found", status=404)
+
+        audio_bytes, engine, timestamp = entry
+        age = time.time() - timestamp
+        if age > TTS_AUDIO_CACHE_TTL_SECONDS:
+            with TTS_AUDIO_CACHE_LOCK:
+                TTS_AUDIO_CACHE.pop(cache_id, None)
+            print(f"[TTS-SERVE] Audio expirado antes de servir: {cache_id[:8]}... (age={age:.1f}s)", flush=True)
+            return Response("Audio expired or not found", status=404)
+
+        if engine == "pending":
+            if time.time() >= deadline:
+                print(f"[TTS-SERVE] Audio ainda pendente após espera: {cache_id[:8]}...", flush=True)
+                return Response("Audio pending", status=202)
+
+            time.sleep(TTS_AUDIO_PENDING_POLL_INTERVAL_SECONDS)
+            continue
+
+        if engine == "failed":
+            with TTS_AUDIO_CACHE_LOCK:
+                TTS_AUDIO_CACHE.pop(cache_id, None)
+            print(f"[TTS-SERVE] Audio synthesis failed: {cache_id[:8]}...", flush=True)
+            return Response("Audio synthesis failed", status=500)
+
+        # Ready: pop and serve (one-time)
+        with TTS_AUDIO_CACHE_LOCK:
+            entry = TTS_AUDIO_CACHE.pop(cache_id, None)
+
+        if not entry:
+            print(f"[TTS-SERVE] Audio não encontrado ao servir (concurrency): {cache_id[:8]}...", flush=True)
+            return Response("Audio expired or not found", status=404)
+
+        audio_bytes, engine, timestamp = entry
+        break
 
     # Detecta tipo de arquivo baseado no engine
     mimetype = "audio/mpeg" if engine == "gtts" else "audio/wav"
