@@ -288,7 +288,7 @@ Novo overlay para exibir um cronômetro que começa em **03:00:00** e realiza co
 #### Fluxo de execução
 
 1. A pagina OBS em `/obs/cronometro` é carregada inicialmente **invisível**.
-2. Ao fazer um **GET** para `/obs/cronometro?action=start`, o cronômetro fica **visível** e inicia a contagem regressiva de 3 minutos.
+2. Ao fazer um **GET** para `/obs/cronometro?action=start`, o cronômetro fica **visível** e inicia a contagem regressiva de 3 horas.
 3. O cronômetro decrementa 1 segundo a cada intervalo até chegar a **00:00:00**.
 4. Após 3 segundos de finalização (00:00:00), o cronômetro desaparece automaticamente e reseta para 03:00:00.
 5. A formatação segue o mesmo padrão do **death counter OBS** (Arial Black, branca, 72px, efeito glow).
@@ -299,7 +299,7 @@ Novo overlay para exibir um cronômetro que começa em **03:00:00** e realiza co
 	- Retorna a página HTML com o cronômetro (inicialmente invisível)
 	- Query parameters:
 		- `?action=start` - inicia a contagem regressiva automaticamente ao carregar a página
-		- `?time=SEGUNDOS` - define um tempo inicial diferente de 180 segundos (ex: `?time=120` começa em 02:00:00)
+		- `?time=SEGUNDOS` - define um tempo inicial diferente de 10800 segundos (ex: `?time=600` começa em 00:10:00)
 	- Exemplo: `https://seu-servico.onrender.com/obs/cronometro?action=start`
 
 - `GET /obs/cronometro.js`
@@ -310,7 +310,7 @@ Novo overlay para exibir um cronômetro que começa em **03:00:00** e realiza co
 
 #### Características
 
-- **Duração**: Começa em 03:00:00 (180 segundos)
+- **Duração**: Começa em 03:00:00 (10800 segundos / 3 horas)
 - **Formato**: HH:MM:SS (ex: 03:00:00, 02:45:30, 00:00:01, 00:00:00)
 - **Visibilidade inicial**: Invisível até acionado
 - **Estilo**: Arial Black, branca, 72px, text-shadow com efeito de glow

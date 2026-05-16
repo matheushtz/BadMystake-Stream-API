@@ -9,7 +9,7 @@
     return;
   }
   
-  let timeRemaining = 180; // 3 minutos em segundos
+  let timeRemaining = 10800; // 3 horas em segundos
   let isRunning = false;
   let intervalId = null;
   
@@ -46,8 +46,8 @@
         // Opcional: esconder o timer após terminar
         setTimeout(function() {
           cronometroDiv.style.display = 'none';
-          timeRemaining = 180;
-          timerDiv.textContent = formatTime(180);
+          timeRemaining = 10800;
+          timerDiv.textContent = formatTime(10800);
         }, 3000);
       }
     }, 1000);
@@ -59,8 +59,8 @@
       clearInterval(intervalId);
     }
     isRunning = false;
-    timeRemaining = 180;
-    timerDiv.textContent = formatTime(180);
+    timeRemaining = 10800;
+    timerDiv.textContent = formatTime(10800);
     cronometroDiv.style.display = 'none';
     console.log('[CRONOMETRO] Timer resetado');
   }
