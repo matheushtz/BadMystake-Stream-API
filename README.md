@@ -281,6 +281,109 @@ Pode-se filtrar por ID, titulo ou ambos (separados por virgula). A filtragem e c
 
 Se necessario, pode-se passar `?reward=ID` ou `?label=TITULO` como query string na URL da Browser Source para sobrescrever.
 
+### Cronômetro Regressivo
+
+Novo overlay para exibir um cronômetro que começa em **03:00:00** e realiza contagem regressiva até **00:00:00**.
+
+#### Fluxo de execução
+
+1. A pagina OBS em `/obs/cronometro` é carregada inicialmente **invisível**.
+2. Ao fazer um **GET** para `/obs/cronometro?action=start`, o cronômetro fica **visível** e inicia a contagem regressiva de 3 minutos.
+3. O cronômetro decrementa 1 segundo a cada intervalo até chegar a **00:00:00**.
+4. Após 3 segundos de finalização (00:00:00), o cronômetro desaparece automaticamente e reseta para 03:00:00.
+5. A formatação segue o mesmo padrão do **death counter OBS** (Arial Black, branca, 72px, efeito glow).
+
+#### Endpoints do cronômetro
+
+- `GET /obs/cronometro`
+	- Retorna a página HTML com o cronômetro (inicialmente invisível)
+	- Query parameters:
+		- `?action=start` - inicia a contagem regressiva automaticamente ao carregar a página
+		- `?time=SEGUNDOS` - define um tempo inicial diferente de 180 segundos (ex: `?time=120` começa em 02:00:00)
+	- Exemplo: `https://seu-servico.onrender.com/obs/cronometro?action=start`
+
+- `GET /obs/cronometro.js`
+	- JavaScript com lógica de contagem regressiva, formatação HH:MM:SS e visibilidade
+
+- `GET /obs/cronometro.css`
+	- CSS com estilo idêntico ao death counter (fonte, sombra, alinhamento)
+
+#### Características
+
+- **Duração**: Começa em 03:00:00 (180 segundos)
+- **Formato**: HH:MM:SS (ex: 03:00:00, 02:45:30, 00:00:01, 00:00:00)
+- **Visibilidade inicial**: Invisível até acionado
+- **Estilo**: Arial Black, branca, 72px, text-shadow com efeito de glow
+- **Auto-reset**: Após atingir 00:00:00, aguarda 3 segundos e desaparece, reseta para 03:00:00
+- **API JavaScript**: Expõe `window.cronometroAPI` para controle manual
+
+#### API JavaScript
+
+O cronômetro expõe as seguintes funções via `window.cronometroAPI`:
+
+```javascript
+window.cronometroAPI.start()      // Inicia a contagem regressiva
+window.cronometroAPI.pause()      // Pausa a contagem
+window.cronometroAPI.resume()     // Retoma a contagem a partir do ponto pausado
+window.cronometroAPI.reset()      // Para e reseta para 03:00:00
+window.cronometroAPI.setTime(segundos)  // Define novo tempo (ex: 120 para 02:00:00)
+window.cronometroAPI.getTime()    // Retorna tempo restante em segundos
+```
+
+#### Como usar no OBS
+
+1. Crie uma Browser Source e aponte para `https://seu-servico.onrender.com/obs/cronometro`.
+2. Configure as dimensões desejadas (sugerido: 800x200 ou similar, com a fonte em 72px o cronômetro fica grande).
+3. Adicione a Browser Source em uma cena ou sobreposição dedicada.
+4. Para iniciar o cronômetro **automaticamente** ao carregar a cena, altere a URL para:
+	- `https://seu-servico.onrender.com/obs/cronometro?action=start`
+5. Alternativamente, pode-se chamar via comando do Nightbot:
+	- `curl https://seu-servico.onrender.com/obs/cronometro?action=start`
+   - Ou usar o console do navegador (F12) para chamar `window.cronometroAPI.start()`
+
+#### Personalizações
+
+**Iniciar com tempo customizado:**
+
+Use o parâmetro `?time=SEGUNDOS` para começar com um tempo diferente:
+
+```
+https://seu-servico.onrender.com/obs/cronometro?action=start&time=60
+```
+
+Isso iniciará com 00:01:00 (1 minuto) em vez de 03:00:00.
+
+**Controle via OBS Lua Script ou Comando:**
+
+Se integrado com automações externas, pode-se fazer GET para:
+
+```bash
+# Iniciar
+curl "http://localhost:5000/obs/cronometro?action=start"
+
+# Com tempo customizado
+curl "http://localhost:5000/obs/cronometro?action=start&time=300"
+```
+
+E no console JS da página (F12):
+
+```javascript
+// Iniciar
+window.cronometroAPI.start()
+
+// Pausar
+window.cronometroAPI.pause()
+
+// Retomar
+window.cronometroAPI.resume()
+
+// Resetar
+window.cronometroAPI.reset()
+
+// Definir tempo (em segundos)
+window.cronometroAPI.setTime(120)  // 2 minutos
+```
+
 ### Endpoint Steam
 
 - `GET /steam/achievements/`

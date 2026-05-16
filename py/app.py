@@ -2133,6 +2133,19 @@ def obs_powerup_audio():
         return send_file_no_cache(MP3_DIR, "nossa.mp3")
     return send_file_no_cache(OGG_DIR, "nossa.ogg")
 
+# Webpage para OBS: cronometro
+@app.route("/obs/cronometro", methods=["GET"])
+def obs_cronometro_page():
+    return send_file_no_cache(HTML_DIR, "obs_cronometro.html")
+
+@app.route("/obs/cronometro.js", methods=["GET"])
+def obs_cronometro_script():
+    return send_file_no_cache(JS_DIR, "obs_cronometro.js")
+
+@app.route("/obs/cronometro.css", methods=["GET"])
+def obs_cronometro_styles():
+    return send_file_no_cache(CSS_DIR, "obs_cronometro.css")
+
 @app.route("/ogg/nossa.ogg", methods=["GET"])
 def obs_powerup_audio_ogg():
     return send_file_no_cache(OGG_DIR, "nossa.ogg")
