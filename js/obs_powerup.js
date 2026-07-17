@@ -173,6 +173,48 @@ function buildTtsAudioPath(pedido) {
     return path;
 }
 
+function buildTtsCacheId(pedido) {
+    if (!pedido || typeof pedido !== "object") {
+        return "";
+    }
+
+    var cacheId = String(pedido.tts_cache_id || pedido.tts_cacheid || "").trim();
+    if (cacheId) {
+        return cacheId;
+    }
+
+    var audioPath = buildTtsAudioPath(pedido);
+    if (!audioPath) {
+        return "";
+    }
+
+    var match = audioPath.match(/\/mp3\/tts-cache\/([a-f0-9]{16,})/i);
+    if (match && match[1]) {
+        return match[1];
+    }
+
+    return "";
+}
+
+function reportTtsPlaybackStatus(cacheId, status, playedAtMs) {
+    var payload = {
+        cache_id: cacheId || "",
+        status: status || "played",
+        played_at_ms: typeof playedAtMs === "number" ? playedAtMs : Date.now()
+    };
+
+    return fetch("/twitch/powerup/tts-playback", {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+    }).catch(function (error) {
+        console.log("[OBS][TTS] Falha ao reportar playback:", error);
+    });
+}
+
 function waitForTtsVoices(timeoutMs) {
     return new Promise(function (resolve) {
         if (!window.speechSynthesis || typeof window.speechSynthesis.getVoices !== "function") {
@@ -382,12 +424,15 @@ function sleepTime(timeMs) {
     });
 }
 
-async function tryPlayAudio() {
+async function tryPlayAudio(ttsCacheId) {
     try {
         var audioLabel = activeAudioPath ? activeAudioPath.split("/").pop() : "audio";
         console.log("[DEBUG] tryPlayAudio - tocando:", audioLabel);
         activeAudio.currentTime = 0;
         await activeAudio.play();
+        if (ttsCacheId) {
+            reportTtsPlaybackStatus(ttsCacheId, "played", Date.now());
+        }
         return true;
     } catch (err) {
         console.log("[OBS] Falha ao tocar audio, tentando recarregar:", err);
@@ -396,9 +441,15 @@ async function tryPlayAudio() {
             await sleepTime(100);
             activeAudio.currentTime = 0;
             await activeAudio.play();
+            if (ttsCacheId) {
+                reportTtsPlaybackStatus(ttsCacheId, "played", Date.now());
+            }
             return true;
         } catch (err2) {
             console.log("[OBS] Reproducao bloqueada:", err2);
+            if (ttsCacheId) {
+                reportTtsPlaybackStatus(ttsCacheId, "inactive", Date.now());
+            }
             return false;
         }
     }
@@ -491,11 +542,12 @@ async function lista() {
         if (listaPedidos.length > 0) {
             var pedido = listaPedidos.shift();
             var ttsAudioPath = buildTtsAudioPath(pedido);
+            var ttsCacheId = buildTtsCacheId(pedido);
 
             if (ttsAudioPath) {
                 console.log("[OBS][TTS] Tocando arquivo gerado:", ttsAudioPath);
                 setAudioSource(ttsAudioPath);
-                var audioPlayed = await tryPlayAudio();
+                var audioPlayed = await tryPlayAudio(ttsCacheId);
                 if (audioPlayed) {
                     await waitForAudioEnd(activeAudio, 45000);
                 }

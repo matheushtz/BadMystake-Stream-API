@@ -18,6 +18,10 @@ __pycache__/
 mp3/tts-generated/
 *.wav
 
+# Large or non-runtime folders that should stay out of Cloud Build uploads.
+disabled/
+postman/
+
 # Keep these assets available in the build context because the app uses them at runtime.
 !mp3/*.mp3
 !tts-model/*.onnx

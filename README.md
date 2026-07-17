@@ -258,6 +258,67 @@ No painel de Creator Dashboard da Twitch, crie um reward customizado com:
 - **Cores**: Cada fatia tem cor distinta (vermelho, azul, verde, amarelo, roxo, laranja)
 - **Animacao**: Gira 6+ voltas completas + angulo aleatorio extra, desacelerando suavemente
 - **Som**: Tom de 1kHz tocado durante a rotacao a cada 10 graus
+
+## Criacao e atualizacao de secrets e variaveis
+
+Esta secao explica como criar os valores sensiveis sem salvar segredos no repositorio.
+
+### 1. Criar o Client Secret da Twitch
+
+O `TWITCH_CLIENT_SECRET` nao e gerado pelo projeto nem pelo Cloud Run. Ele e criado no painel da Twitch.
+
+Passo a passo:
+
+1. Acesse o portal de desenvolvedor da Twitch.
+2. Abra a aplicacao usada por este projeto.
+3. Entre em `Settings`.
+4. Clique em `New Secret` ou `Regenerate Secret`.
+5. Copie o novo valor imediatamente, porque a Twitch nao mostra esse segredo de novo.
+6. Guarde esse valor apenas no Cloud Run ou no Secret Manager, nunca no Git.
+
+### 2. Criar o webhook secret do EventSub
+
+O `TWITCH_WEBHOOK_SECRET` e um valor definido por voce para assinar as notificacoes do EventSub.
+
+Passo a passo recomendado:
+
+1. Gere uma string longa e aleatoria, por exemplo com um gerador de senhas.
+2. Nao reutilize o `TWITCH_CLIENT_SECRET` como webhook secret.
+3. Salve esse valor apenas como variavel segura no Cloud Run ou no Secret Manager.
+
+### 3. Atualizar as variaveis no Cloud Run
+
+No Cloud Run, configure as variaveis assim:
+
+- `TWITCH_DEV_ID` ou `TWITCH_CLIENT_ID`: o client id da aplicacao Twitch
+- `TWITCH_CLIENT_SECRET`: o client secret novo da Twitch
+- `TWITCH_WEBHOOK_SECRET`: o segredo do webhook EventSub
+- `TWITCH_SECRET`: mantenha apenas se precisar de compatibilidade temporaria
+
+Exemplo via `gcloud`:
+
+```powershell
+gcloud run services update streambadmystake --region southamerica-east1 --set-env-vars TWITCH_CLIENT_SECRET=NOVA_SECRET_AQUI,TWITCH_WEBHOOK_SECRET=SEGREDO_WEBHOOK_AQUI
+```
+
+### 4. Validar no projeto
+
+Depois de atualizar as variaveis:
+
+1. Chame `GET /debug/env` para confirmar se as variaveis chegaram ao ambiente.
+2. Chame `POST /twitch/eventsub/subscribe` para validar se a Twitch aceita o client secret.
+3. Se a resposta continuar com `invalid client secret`, gere um novo secret no painel da Twitch e atualize o Cloud Run novamente.
+
+### 5. O que nao guardar no repositorio
+
+Nunca salve no Git:
+
+- tokens
+- secrets
+- chaves de API
+- credenciais do Cloud Run
+
+Use apenas o Cloud Run, Secret Manager ou variaveis de ambiente fora do repositorio para esses valores.
 - **Precision**: O valor exato apontado pelo triangulo vermelho (topo) e calculado usando trigonometria e conic-gradient com `from -90deg`
 
 #### Como usar no OBS

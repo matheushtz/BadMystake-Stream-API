@@ -114,12 +114,12 @@ def start_tts_workers():
                     with TTS_AUDIO_CACHE_LOCK:
                         entry = TTS_AUDIO_CACHE.get(cache_id)
                         if not entry:
-                            TTS_AUDIO_CACHE[cache_id] = (None, "failed", time.time())
+                            TTS_AUDIO_CACHE[cache_id] = (None, "failed", time.time(), None)
                             print(f"[TTS-WORKER] Marked failed (no entry): {cache_id[:8]}...", flush=True)
                         else:
-                            _, engine_state, _ = entry
+                            _, engine_state, _, _ = _unpack_tts_cache_entry(entry)
                             if engine_state == "pending":
-                                TTS_AUDIO_CACHE[cache_id] = (None, "failed", time.time())
+                                TTS_AUDIO_CACHE[cache_id] = (None, "failed", time.time(), None)
                                 print(f"[TTS-WORKER] Marked failed (still pending): {cache_id[:8]}...", flush=True)
                 except Exception:
                     pass
@@ -131,13 +131,16 @@ def start_tts_workers():
     TTS_WORKERS_STARTED = True
 
 # TTS Audio Cache com arquivos temporários (sem manter o audio inteiro em RAM)
-# Estrutura: {cache_id: (audio_path, engine, timestamp)}
+# Estrutura: {cache_id: (audio_path, engine, timestamp, worker_started_at_ms)}
 TTS_AUDIO_CACHE = OrderedDict()
 TTS_AUDIO_CACHE_MAX_SIZE_MB = 100
 TTS_AUDIO_CACHE_TTL_SECONDS = 90  # 90 segundos
 TTS_AUDIO_PENDING_WAIT_SECONDS = 60
 TTS_AUDIO_PENDING_POLL_INTERVAL_SECONDS = 0.25
 TTS_AUDIO_CACHE_LOCK = threading.Lock()
+TTS_PLAYBACK_META = OrderedDict()
+TTS_PLAYBACK_META_TTL_SECONDS = 20 * 60
+TTS_PLAYBACK_META_LOCK = threading.Lock()
 MAX_SINGLE_TTS_BYTES = 50 * 1024 * 1024  # 50 MB per item safety cap
 # Track last-used voices to avoid repeating the same voice consecutively
 TTS_LAST_VOICE = {
@@ -224,7 +227,8 @@ def get_process_memory_stats():
 def get_tts_cache_stats():
     with TTS_AUDIO_CACHE_LOCK:
         total_size_bytes = 0
-        for audio_path, engine, _ in TTS_AUDIO_CACHE.values():
+        for entry in TTS_AUDIO_CACHE.values():
+            audio_path, engine, _, _ = _unpack_tts_cache_entry(entry)
             if engine in ("pending", "failed") or not audio_path:
                 continue
             try:
@@ -244,12 +248,7 @@ def enqueue_tts_synthesis(cache_id, text, tts_lang):
     job = {"cache_id": cache_id, "text": text, "tts_lang": tts_lang}
     # create a pending marker in cache so callers know work is in progress
     with TTS_AUDIO_CACHE_LOCK:
-        if cache_id in TTS_AUDIO_CACHE:
-            # refresh timestamp/state
-            _, prev_engine, _ = TTS_AUDIO_CACHE[cache_id]
-            TTS_AUDIO_CACHE[cache_id] = (b"", "pending", time.time())
-        else:
-            TTS_AUDIO_CACHE[cache_id] = (b"", "pending", time.time())
+        TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time(), None)
 
     try:
         TTS_JOB_QUEUE.put(job, block=False)
@@ -260,7 +259,7 @@ def enqueue_tts_synthesis(cache_id, text, tts_lang):
         print(f"[TTS] Falha ao enfileirar job: {exc}", flush=True)
         # mark failed
         with TTS_AUDIO_CACHE_LOCK:
-            TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time())
+            TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time(), None)
         return False
 
 def _run_synthesis_job(cache_id, text, tts_lang):
@@ -385,7 +384,7 @@ def get_all_memory_stats():
     # TTS Audio Cache
     with TTS_AUDIO_CACHE_LOCK:
         tts_cache_bytes = 0
-        for audio_path, engine, _ in TTS_AUDIO_CACHE.values():
+        for audio_path, engine, _, _ in TTS_AUDIO_CACHE.values():
             if engine in ("pending", "failed") or not audio_path:
                 continue
             try:
@@ -686,7 +685,8 @@ def cleanup_expired_tts_cache():
     expired_keys = []
     
     with TTS_AUDIO_CACHE_LOCK:
-        for cache_id, (_, _, timestamp) in TTS_AUDIO_CACHE.items():
+        for cache_id, entry in TTS_AUDIO_CACHE.items():
+            _, _, timestamp, _ = _unpack_tts_cache_entry(entry)
             if now - timestamp > TTS_AUDIO_CACHE_TTL_SECONDS:
                 expired_keys.append(cache_id)
         
@@ -695,6 +695,44 @@ def cleanup_expired_tts_cache():
             if entry:
                 _delete_tts_audio_file(entry[0])
             print(f"[TTS-CACHE] Expirado: {cache_id[:8]}...", flush=True)
+
+    with TTS_PLAYBACK_META_LOCK:
+        expired_meta = []
+        for cache_id, (_, timestamp) in TTS_PLAYBACK_META.items():
+            if now - timestamp > TTS_PLAYBACK_META_TTL_SECONDS:
+                expired_meta.append(cache_id)
+
+        for cache_id in expired_meta:
+            TTS_PLAYBACK_META.pop(cache_id, None)
+
+def record_tts_playback_meta(cache_id, worker_started_at_ms):
+    if not cache_id:
+        return
+
+    started_at_ms = int(worker_started_at_ms or 0)
+    if started_at_ms <= 0:
+        return
+
+    with TTS_PLAYBACK_META_LOCK:
+        if cache_id in TTS_PLAYBACK_META:
+            del TTS_PLAYBACK_META[cache_id]
+        TTS_PLAYBACK_META[cache_id] = (started_at_ms, time.time())
+
+def get_tts_playback_worker_started_at_ms(cache_id):
+    if not cache_id:
+        return None
+
+    with TTS_PLAYBACK_META_LOCK:
+        entry = TTS_PLAYBACK_META.get(cache_id)
+        if not entry:
+            return None
+
+        started_at_ms, timestamp = entry
+        if time.time() - timestamp > TTS_PLAYBACK_META_TTL_SECONDS:
+            TTS_PLAYBACK_META.pop(cache_id, None)
+            return None
+
+        return started_at_ms
 
 def _ensure_tts_audio_temp_dir():
     os.makedirs(TTS_AUDIO_TEMP_DIR, exist_ok=True)
@@ -708,7 +746,43 @@ def _delete_tts_audio_file(audio_path):
     except OSError:
         pass
 
-def add_to_tts_cache(cache_id, audio_path, engine):
+def _unpack_tts_cache_entry(entry):
+    if not isinstance(entry, tuple):
+        return None, None, 0.0, None
+
+    if len(entry) >= 4:
+        audio_path, engine, timestamp, started_at_ms = entry[:4]
+    elif len(entry) == 3:
+        audio_path, engine, timestamp = entry
+        started_at_ms = None
+    elif len(entry) == 2:
+        audio_path, engine = entry
+        timestamp = 0.0
+        started_at_ms = None
+    elif len(entry) == 1:
+        audio_path = entry[0]
+        engine = None
+        timestamp = 0.0
+        started_at_ms = None
+    else:
+        audio_path = None
+        engine = None
+        timestamp = 0.0
+        started_at_ms = None
+
+    try:
+        timestamp = float(timestamp or 0.0)
+    except (TypeError, ValueError):
+        timestamp = 0.0
+
+    try:
+        started_at_ms = int(started_at_ms) if started_at_ms is not None else None
+    except (TypeError, ValueError):
+        started_at_ms = None
+
+    return audio_path, engine, timestamp, started_at_ms
+
+def add_to_tts_cache(cache_id, audio_path, engine, worker_started_at_ms=None):
     """Adiciona áudio ao cache com proteção de tamanho máximo"""
     cleanup_expired_tts_cache()
     # Safety: refuse to cache absurdly large single items
@@ -723,22 +797,25 @@ def add_to_tts_cache(cache_id, audio_path, engine):
         with TTS_AUDIO_CACHE_LOCK:
             if cache_id in TTS_AUDIO_CACHE:
                 del TTS_AUDIO_CACHE[cache_id]
-            TTS_AUDIO_CACHE[cache_id] = (None, "failed", time.time())
+            TTS_AUDIO_CACHE[cache_id] = (None, "failed", time.time(), None)
         _delete_tts_audio_file(audio_path)
         return False
 
     with TTS_AUDIO_CACHE_LOCK:
         # Remove se já existe (reinsert no final da OrderedDict)
         if cache_id in TTS_AUDIO_CACHE:
-            old_entry = TTS_AUDIO_CACHE[cache_id]
+            old_entry = _unpack_tts_cache_entry(TTS_AUDIO_CACHE[cache_id])
             del TTS_AUDIO_CACHE[cache_id]
             _delete_tts_audio_file(old_entry[0])
         
-        TTS_AUDIO_CACHE[cache_id] = (audio_path, engine, time.time())
+        started_at_ms = int(worker_started_at_ms or (time.time() * 1000))
+        TTS_AUDIO_CACHE[cache_id] = (audio_path, engine, time.time(), started_at_ms)
+        record_tts_playback_meta(cache_id, started_at_ms)
         
         # Calcula tamanho total do cache
         total_size_bytes = 0
-        for cached_path, cached_engine, _ in TTS_AUDIO_CACHE.values():
+        for entry in TTS_AUDIO_CACHE.values():
+            cached_path, cached_engine, _, _ = _unpack_tts_cache_entry(entry)
             if cached_engine in ("pending", "failed") or not cached_path:
                 continue
             try:
@@ -768,24 +845,24 @@ def get_from_tts_cache(cache_id):
     """Recupera áudio do cache"""
     with TTS_AUDIO_CACHE_LOCK:
         if cache_id in TTS_AUDIO_CACHE:
-            audio_path, engine, timestamp = TTS_AUDIO_CACHE[cache_id]
+            audio_path, engine, timestamp, started_at_ms = _unpack_tts_cache_entry(TTS_AUDIO_CACHE[cache_id])
             age = time.time() - timestamp
             if age > TTS_AUDIO_CACHE_TTL_SECONDS:
                 entry = TTS_AUDIO_CACHE.pop(cache_id, None)
                 if entry:
                     _delete_tts_audio_file(entry[0])
                 print(f"[TTS-CACHE] Expirado durante acesso: {cache_id[:8]}...", flush=True)
-                return None, None
+                return None, None, None
             # special-state entries
             if engine == "pending":
-                return None, "pending"
+                return None, "pending", started_at_ms
             if engine == "failed":
-                return None, "failed"
+                return None, "failed", started_at_ms
 
             print(f"[TTS-CACHE] Hit: {cache_id[:8]}... (idade={age:.1f}s, engine={engine})", flush=True)
-            return audio_path, engine
+            return audio_path, engine, started_at_ms
     
-    return None, None
+    return None, None, None
 
 @lru_cache(maxsize=1)
 def get_piper_voice_class():
@@ -926,6 +1003,7 @@ def validate_generated_wav_file(wav_path):
 
 def generate_tts_audio(tts_text, tts_lang):
     start_time = time.time()
+    worker_started_at_ms = int(start_time * 1000)
     # Enforce same hard cap here as a safety net
     text = normalize_tts_text(tts_text, max_length=MAX_TTS_INPUT_CHARS)
     if not text:
@@ -948,7 +1026,7 @@ def generate_tts_audio(tts_text, tts_lang):
             model_name = os.path.splitext(os.path.basename(model_path))[0]
             # Check cache per text+engine+voice
             cache_id = get_tts_cache_id(text, engine="piper", voice=model_name)
-            cached_bytes, cached_engine = get_from_tts_cache(cache_id)
+            cached_bytes, cached_engine, cached_started_at_ms = get_from_tts_cache(cache_id)
             if cached_bytes:
                 print(f"[TTS] Usando áudio em cache: {cache_id[:8]}... (voice={model_name})", flush=True)
                 # record last-used
@@ -1012,7 +1090,7 @@ def generate_tts_audio(tts_text, tts_lang):
                 print(f"[TTS] Síntese concluída (engine=piper) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
                 
                 # Armazena em cache
-                if add_to_tts_cache(cache_id, wav_path, "piper"):
+                if add_to_tts_cache(cache_id, wav_path, "piper", worker_started_at_ms=worker_started_at_ms):
                     start_tts_cache_monitor()
                 else:
                     _delete_tts_audio_file(wav_path)
@@ -1055,7 +1133,7 @@ def generate_tts_audio(tts_text, tts_lang):
     print(f"[TTS] Síntese concluída (engine=gtts) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
     
     # Armazena em cache
-    if add_to_tts_cache(cache_id, mp3_path, "gtts"):
+    if add_to_tts_cache(cache_id, mp3_path, "gtts", worker_started_at_ms=worker_started_at_ms):
         start_tts_cache_monitor()
     else:
         _delete_tts_audio_file(mp3_path)
@@ -1089,10 +1167,13 @@ def attach_backend_tts_audio(event_payload):
 
     # Check cache first; if missing, enqueue background synthesis and return 202-style pending URL
     cache_id = get_tts_cache_id(composed, engine="piper")
-    cached_bytes, cached_engine = get_from_tts_cache(cache_id)
+    cached_bytes, cached_engine, cached_started_at_ms = get_from_tts_cache(cache_id)
+    event_payload["tts_cache_id"] = cache_id
     if cached_bytes:
         event_payload["tts_audio_url"] = f"/mp3/tts-cache/{cache_id}"
         event_payload["tts_engine"] = cached_engine
+        if cached_started_at_ms:
+            event_payload["tts_worker_started_at_ms"] = cached_started_at_ms
     else:
         # If cache reports pending/failed, propagate that state without enqueuing again
         if cached_engine == "pending":
@@ -1106,6 +1187,8 @@ def attach_backend_tts_audio(event_payload):
             enqueued = enqueue_tts_synthesis(cache_id, composed, tts_lang)
             event_payload["tts_audio_url"] = f"/mp3/tts-cache/{cache_id}"
             event_payload["tts_engine"] = "pending" if enqueued else "error"
+            if enqueued:
+                event_payload["tts_worker_started_at_ms"] = int(time.time() * 1000)
 
 def steam_target_steamid64():
     return get_first_env("STEAM_TARGET_STEAMID64")
@@ -2255,7 +2338,7 @@ def serve_tts_audio(cache_id):
             print(f"[TTS-SERVE] Audio não encontrado ou expirado: {cache_id[:8]}...", flush=True)
             return Response("Audio expired or not found", status=404)
 
-        audio_path, engine, timestamp = entry
+        audio_path, engine, timestamp, _ = _unpack_tts_cache_entry(entry)
         age = time.time() - timestamp
         if age > TTS_AUDIO_CACHE_TTL_SECONDS:
             with TTS_AUDIO_CACHE_LOCK:
@@ -2289,7 +2372,7 @@ def serve_tts_audio(cache_id):
             print(f"[TTS-SERVE] Audio não encontrado ao servir (concurrency): {cache_id[:8]}...", flush=True)
             return Response("Audio expired or not found", status=404)
 
-        audio_path, engine, timestamp = entry
+        audio_path, engine, timestamp, _ = _unpack_tts_cache_entry(entry)
         break
 
     # Detecta tipo de arquivo baseado no engine
@@ -2324,6 +2407,37 @@ def serve_tts_audio(cache_id):
     response.headers["Expires"] = "0"
     response.headers["Content-Disposition"] = f'inline; filename="audio{extension}"'
     return response
+
+@app.route("/twitch/powerup/tts-playback", methods=["POST"])
+def twitch_powerup_tts_playback():
+    payload = request.get_json(silent=True) or {}
+    cache_id = str(payload.get("cache_id", "") or "").strip()
+    status = str(payload.get("status", "") or "").strip().lower()
+    played_at_ms = payload.get("played_at_ms")
+
+    try:
+        played_at_ms = int(played_at_ms)
+    except (TypeError, ValueError):
+        played_at_ms = int(time.time() * 1000)
+
+    if status == "inactive":
+        print(f"[TTS-JS-TIMESTAMP] Navegador inativo cache_id={cache_id[:8] if cache_id else '<sem-cache>'}", flush=True)
+        return {"ok": True, "status": "inactive"}, 200
+
+    worker_started_at_ms = get_tts_playback_worker_started_at_ms(cache_id)
+    if worker_started_at_ms:
+        elapsed_seconds = max(0.0, (played_at_ms - worker_started_at_ms) / 1000.0)
+        print(
+            f"[TTS-JS-TIMESTAMP] Played at {played_at_ms} | Total elapsed time: {elapsed_seconds:.3f} segundos | cache_id={cache_id[:8] if cache_id else '<sem-cache>'}",
+            flush=True,
+        )
+    else:
+        print(
+            f"[TTS-JS-TIMESTAMP] Played at {played_at_ms} | Total elapsed time: unknown | cache_id={cache_id[:8] if cache_id else '<sem-cache>'}",
+            flush=True,
+        )
+
+    return {"ok": True, "status": "played"}, 200
 
 @app.route("/mp3/<path:filename>", methods=["GET"])
 def mp3_assets(filename):
