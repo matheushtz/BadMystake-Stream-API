@@ -1,0 +1,25 @@
+# Cloud Build upload control for this project.
+# Keep secrets and local-only artifacts out of the source upload.
+
+.env
+.env.*
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.git/
+.gitignore
+
+# Runtime-generated audio should not be uploaded.
+mp3/tts-generated/
+*.wav
+
+# Keep these assets available in the build context because the app uses them at runtime.
+!mp3/*.mp3
+!tts-model/*.onnx
+!tts-model/*.onnx.data
+!tts-json/*.json
