@@ -248,7 +248,7 @@ def enqueue_tts_synthesis(cache_id, text, tts_lang):
     job = {"cache_id": cache_id, "text": text, "tts_lang": tts_lang}
     # create a pending marker in cache so callers know work is in progress
     with TTS_AUDIO_CACHE_LOCK:
-        TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time(), None)
+        TTS_AUDIO_CACHE[cache_id] = (b"", "pending", time.time(), None)
 
     try:
         TTS_JOB_QUEUE.put(job, block=False)
