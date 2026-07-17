@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, send_from_directory
+from flask import Flask, request, Response, send_from_directory, send_file, stream_with_context
 import base64
 import importlib
 import hashlib
@@ -22,6 +22,7 @@ import time
 import uuid
 import wave
 import io
+import tempfile
 import struct
 from functools import lru_cache
 from datetime import datetime, timezone
@@ -54,6 +55,7 @@ MP3_DIR = os.path.join(PROJECT_ROOT, "mp3")
 FILE_PATH = os.path.join(JSON_DIR, "dados.json")
 STEAM_GAMES_FILE = os.path.join(JSON_DIR, "steam_games.json")
 GENERATED_TTS_DIR = os.path.join(MP3_DIR, "tts-generated")
+TTS_AUDIO_TEMP_DIR = os.path.join(tempfile.gettempdir(), "api-mazin-tts")
 DEFAULT_DATA = {}
 DEFAULT_TTS_REWARD_IDENTIFIERS = {
     "965c119b-f6c7-4418-a407-dd6084e6c591",
@@ -112,12 +114,12 @@ def start_tts_workers():
                     with TTS_AUDIO_CACHE_LOCK:
                         entry = TTS_AUDIO_CACHE.get(cache_id)
                         if not entry:
-                            TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time())
+                            TTS_AUDIO_CACHE[cache_id] = (None, "failed", time.time())
                             print(f"[TTS-WORKER] Marked failed (no entry): {cache_id[:8]}...", flush=True)
                         else:
                             _, engine_state, _ = entry
                             if engine_state == "pending":
-                                TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time())
+                                TTS_AUDIO_CACHE[cache_id] = (None, "failed", time.time())
                                 print(f"[TTS-WORKER] Marked failed (still pending): {cache_id[:8]}...", flush=True)
                 except Exception:
                     pass
@@ -128,8 +130,8 @@ def start_tts_workers():
 
     TTS_WORKERS_STARTED = True
 
-# TTS Audio Cache em memória (sem disco para compatibilidade com Render/serverless)
-# Estrutura: {cache_id: (audio_bytes, engine, timestamp)}
+# TTS Audio Cache com arquivos temporários (sem manter o audio inteiro em RAM)
+# Estrutura: {cache_id: (audio_path, engine, timestamp)}
 TTS_AUDIO_CACHE = OrderedDict()
 TTS_AUDIO_CACHE_MAX_SIZE_MB = 100
 TTS_AUDIO_CACHE_TTL_SECONDS = 90  # 90 segundos
@@ -221,7 +223,14 @@ def get_process_memory_stats():
 
 def get_tts_cache_stats():
     with TTS_AUDIO_CACHE_LOCK:
-        total_size_bytes = sum(len(audio_bytes) for audio_bytes, _, _ in TTS_AUDIO_CACHE.values())
+        total_size_bytes = 0
+        for audio_path, engine, _ in TTS_AUDIO_CACHE.values():
+            if engine in ("pending", "failed") or not audio_path:
+                continue
+            try:
+                total_size_bytes += os.path.getsize(audio_path)
+            except OSError:
+                continue
         return {
             "items": len(TTS_AUDIO_CACHE),
             "size_mb": round(total_size_bytes / (1024 * 1024), 2),
@@ -282,43 +291,51 @@ def _run_synthesis_job(cache_id, text, tts_lang):
                 configured_speed = apply_piper_tts_speed(syn_config, model_name)
                 print(f"[TTS-WORKER] Velocidade configurada (modelo={model_name}, tts_speed={configured_speed})", flush=True)
 
-                wav_buffer = io.BytesIO()
-                with wave.open(wav_buffer, "wb") as wav_file:
-                    wav_file.setnchannels(1)
-                    wav_file.setsampwidth(2)
-                    wav_file.setframerate(voice.config.sample_rate)
-
-                    print(f"[TTS-WORKER] Iniciando síntese com voice.synthesize()...", flush=True)
-                    chunk_count = 0
-                    for chunk in voice.synthesize(text, syn_config):
-                        chunk_count += 1
-                        wav_file.writeframes(chunk.audio_int16_bytes)
-
-                    print(f"[TTS-WORKER] Síntese completa: {chunk_count} chunks escritos", flush=True)
-
-                wav_bytes = wav_buffer.getvalue()
-                wav_size = len(wav_bytes)
-                print(f"[TTS-WORKER] Áudio WAV em memória: {wav_size} bytes", flush=True)
-
-                # validate
-                buf = io.BytesIO(wav_bytes)
+                _ensure_tts_audio_temp_dir()
+                wav_fd, wav_path = tempfile.mkstemp(prefix=f"tts-{cache_id[:8]}-", suffix=".wav", dir=TTS_AUDIO_TEMP_DIR)
                 try:
-                    with wave.open(buf, "rb") as wav_check:
-                        channels = wav_check.getnchannels()
-                        sample_width = wav_check.getsampwidth()
-                        frame_rate = wav_check.getframerate()
-                        frame_count = wav_check.getnframes()
+                    with os.fdopen(wav_fd, "wb") as wav_fp:
+                        with wave.open(wav_fp, "wb") as wav_file:
+                            wav_file.setnchannels(1)
+                            wav_file.setsampwidth(2)
+                            wav_file.setframerate(voice.config.sample_rate)
 
-                    if channels <= 0 or sample_width <= 0 or frame_rate <= 0 or frame_count <= 0:
-                        raise RuntimeError("wav invalido")
-                except Exception as exc:
-                    raise RuntimeError(f"wav invalido: {exc}")
+                            print(f"[TTS-WORKER] Iniciando síntese com voice.synthesize()...", flush=True)
+                            chunk_count = 0
+                            for chunk in voice.synthesize(text, syn_config):
+                                chunk_count += 1
+                                wav_file.writeframes(chunk.audio_int16_bytes)
+
+                            print(f"[TTS-WORKER] Síntese completa: {chunk_count} chunks escritos", flush=True)
+
+                    try:
+                        wav_size = os.path.getsize(wav_path)
+                    except OSError:
+                        wav_size = 0
+                    print(f"[TTS-WORKER] Áudio WAV gravado em arquivo temporário: {wav_size} bytes", flush=True)
+
+                    # validate
+                    try:
+                        with wave.open(wav_path, "rb") as wav_check:
+                            channels = wav_check.getnchannels()
+                            sample_width = wav_check.getsampwidth()
+                            frame_rate = wav_check.getframerate()
+                            frame_count = wav_check.getnframes()
+
+                        if channels <= 0 or sample_width <= 0 or frame_rate <= 0 or frame_count <= 0:
+                            raise RuntimeError("wav invalido")
+                    except Exception as exc:
+                        raise RuntimeError(f"wav invalido: {exc}")
+                except Exception:
+                    _delete_tts_audio_file(wav_path)
+                    raise
 
                 print(f"[TTS-WORKER] Piper selecionado: {os.path.basename(model_path)}", flush=True)
                 end_time = time.time()
                 print(f"[TTS-WORKER] Síntese concluída (engine=piper) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
 
-                add_to_tts_cache(cache_id, wav_bytes, "piper")
+                if not add_to_tts_cache(cache_id, wav_path, "piper"):
+                    _delete_tts_audio_file(wav_path)
                 TTS_LAST_VOICE["piper"] = os.path.basename(model_path)
                 return
             except Exception as exc:
@@ -331,17 +348,26 @@ def _run_synthesis_job(cache_id, text, tts_lang):
         return
 
     lang = normalize_backend_tts_lang(tts_lang)
+    _ensure_tts_audio_temp_dir()
+    mp3_fd, mp3_path = tempfile.mkstemp(prefix=f"tts-{cache_id[:8]}-", suffix=".mp3", dir=TTS_AUDIO_TEMP_DIR)
     try:
-        mp3_buffer = io.BytesIO()
-        gtts_class(text=text, lang=lang).write_to_fp(mp3_buffer)
-        mp3_bytes = mp3_buffer.getvalue()
+        with os.fdopen(mp3_fd, "wb") as mp3_fp:
+            gtts_class(text=text, lang=lang).write_to_fp(mp3_fp)
     except Exception as exc:
+        _delete_tts_audio_file(mp3_path)
         print(f"[TTS-WORKER] Falha ao gerar audio com gTTS: {exc}", flush=True)
         return
 
+    try:
+        mp3_size = os.path.getsize(mp3_path)
+    except OSError:
+        mp3_size = 0
+    print(f"[TTS-WORKER] Áudio MP3 gravado em arquivo temporário: {mp3_size} bytes", flush=True)
+
     end_time = time.time()
     print(f"[TTS-WORKER] Síntese concluída (engine=gtts) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
-    add_to_tts_cache(cache_id, mp3_bytes, "gtts")
+    if not add_to_tts_cache(cache_id, mp3_path, "gtts"):
+        _delete_tts_audio_file(mp3_path)
 
 def log_tts_cache_stats(prefix="[TTS-CACHE]"):
     stats = get_tts_cache_stats()
@@ -358,7 +384,14 @@ def get_all_memory_stats():
     
     # TTS Audio Cache
     with TTS_AUDIO_CACHE_LOCK:
-        tts_cache_bytes = sum(len(audio_bytes) for audio_bytes, _, _ in TTS_AUDIO_CACHE.values())
+        tts_cache_bytes = 0
+        for audio_path, engine, _ in TTS_AUDIO_CACHE.values():
+            if engine in ("pending", "failed") or not audio_path:
+                continue
+            try:
+                tts_cache_bytes += os.path.getsize(audio_path)
+            except OSError:
+                continue
         tts_cache_items = len(TTS_AUDIO_CACHE)
     
     # POWERUP_EVENT_STATE
@@ -658,15 +691,29 @@ def cleanup_expired_tts_cache():
                 expired_keys.append(cache_id)
         
         for cache_id in expired_keys:
-            del TTS_AUDIO_CACHE[cache_id]
+            entry = TTS_AUDIO_CACHE.pop(cache_id, None)
+            if entry:
+                _delete_tts_audio_file(entry[0])
             print(f"[TTS-CACHE] Expirado: {cache_id[:8]}...", flush=True)
 
-def add_to_tts_cache(cache_id, audio_bytes, engine):
+def _ensure_tts_audio_temp_dir():
+    os.makedirs(TTS_AUDIO_TEMP_DIR, exist_ok=True)
+
+def _delete_tts_audio_file(audio_path):
+    if not audio_path:
+        return
+
+    try:
+        os.remove(audio_path)
+    except OSError:
+        pass
+
+def add_to_tts_cache(cache_id, audio_path, engine):
     """Adiciona áudio ao cache com proteção de tamanho máximo"""
     cleanup_expired_tts_cache()
     # Safety: refuse to cache absurdly large single items
     try:
-        size_bytes = len(audio_bytes)
+        size_bytes = os.path.getsize(audio_path)
     except Exception:
         size_bytes = 0
 
@@ -676,38 +723,57 @@ def add_to_tts_cache(cache_id, audio_bytes, engine):
         with TTS_AUDIO_CACHE_LOCK:
             if cache_id in TTS_AUDIO_CACHE:
                 del TTS_AUDIO_CACHE[cache_id]
-            TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time())
+            TTS_AUDIO_CACHE[cache_id] = (None, "failed", time.time())
+        _delete_tts_audio_file(audio_path)
         return False
 
     with TTS_AUDIO_CACHE_LOCK:
         # Remove se já existe (reinsert no final da OrderedDict)
         if cache_id in TTS_AUDIO_CACHE:
+            old_entry = TTS_AUDIO_CACHE[cache_id]
             del TTS_AUDIO_CACHE[cache_id]
+            _delete_tts_audio_file(old_entry[0])
         
-        TTS_AUDIO_CACHE[cache_id] = (audio_bytes, engine, time.time())
+        TTS_AUDIO_CACHE[cache_id] = (audio_path, engine, time.time())
         
         # Calcula tamanho total do cache
-        total_size_bytes = sum(len(data) for data, _, _ in TTS_AUDIO_CACHE.values())
+        total_size_bytes = 0
+        for cached_path, cached_engine, _ in TTS_AUDIO_CACHE.values():
+            if cached_engine in ("pending", "failed") or not cached_path:
+                continue
+            try:
+                total_size_bytes += os.path.getsize(cached_path)
+            except OSError:
+                continue
         total_size_mb = total_size_bytes / (1024 * 1024)
         
         # Remove itens antigos se excede limite
         while total_size_mb > TTS_AUDIO_CACHE_MAX_SIZE_MB and len(TTS_AUDIO_CACHE) > 1:
             old_id, old_data = TTS_AUDIO_CACHE.popitem(last=False)
-            total_size_bytes -= len(old_data[0])
+            old_size = 0
+            if old_data[0]:
+                try:
+                    old_size = os.path.getsize(old_data[0])
+                except OSError:
+                    old_size = 0
+            _delete_tts_audio_file(old_data[0])
+            total_size_bytes -= old_size
             total_size_mb = total_size_bytes / (1024 * 1024)
             print(f"[TTS-CACHE] Removido (limite): {old_id[:8]}...", flush=True)
         
-        print(f"[TTS-CACHE] Adicionado: {cache_id[:8]}... (tamanho={len(audio_bytes)/1024:.1f}KB, cache_total={total_size_mb:.1f}MB)", flush=True)
+        print(f"[TTS-CACHE] Adicionado: {cache_id[:8]}... (tamanho={size_bytes/1024:.1f}KB, cache_total={total_size_mb:.1f}MB)", flush=True)
     return True
 
 def get_from_tts_cache(cache_id):
     """Recupera áudio do cache"""
     with TTS_AUDIO_CACHE_LOCK:
         if cache_id in TTS_AUDIO_CACHE:
-            audio_bytes, engine, timestamp = TTS_AUDIO_CACHE[cache_id]
+            audio_path, engine, timestamp = TTS_AUDIO_CACHE[cache_id]
             age = time.time() - timestamp
             if age > TTS_AUDIO_CACHE_TTL_SECONDS:
-                del TTS_AUDIO_CACHE[cache_id]
+                entry = TTS_AUDIO_CACHE.pop(cache_id, None)
+                if entry:
+                    _delete_tts_audio_file(entry[0])
                 print(f"[TTS-CACHE] Expirado durante acesso: {cache_id[:8]}...", flush=True)
                 return None, None
             # special-state entries
@@ -717,7 +783,7 @@ def get_from_tts_cache(cache_id):
                 return None, "failed"
 
             print(f"[TTS-CACHE] Hit: {cache_id[:8]}... (idade={age:.1f}s, engine={engine})", flush=True)
-            return audio_bytes, engine
+            return audio_path, engine
     
     return None, None
 
@@ -902,46 +968,54 @@ def generate_tts_audio(tts_text, tts_lang):
                 configured_speed = apply_piper_tts_speed(syn_config, model_name)
                 print(f"[TTS] Velocidade configurada (modelo={model_name}, tts_speed={configured_speed})", flush=True)
                 
-                # Síntese em memória via BytesIO
-                wav_buffer = io.BytesIO()
-                with wave.open(wav_buffer, "wb") as wav_file:
-                    wav_file.setnchannels(1)
-                    wav_file.setsampwidth(2)
-                    wav_file.setframerate(voice.config.sample_rate)
-                    
-                    print(f"[TTS] Iniciando síntese com voice.synthesize()...", flush=True)
-                    chunk_count = 0
-                    for chunk in voice.synthesize(text, syn_config):
-                        chunk_count += 1
-                        wav_file.writeframes(chunk.audio_int16_bytes)
-                    
-                    print(f"[TTS] Síntese completa: {chunk_count} chunks escritos", flush=True)
-
-                wav_bytes = wav_buffer.getvalue()
-                wav_size = len(wav_bytes)
-                print(f"[TTS] Áudio WAV em memória: {wav_size} bytes", flush=True)
-
-                # Valida bytes em memória
-                buf = io.BytesIO(wav_bytes)
+                _ensure_tts_audio_temp_dir()
+                wav_fd, wav_path = tempfile.mkstemp(prefix=f"tts-{cache_id[:8]}-", suffix=".wav", dir=TTS_AUDIO_TEMP_DIR)
                 try:
-                    with wave.open(buf, "rb") as wav_check:
-                        channels = wav_check.getnchannels()
-                        sample_width = wav_check.getsampwidth()
-                        frame_rate = wav_check.getframerate()
-                        frame_count = wav_check.getnframes()
-                    
-                    if channels <= 0 or sample_width <= 0 or frame_rate <= 0 or frame_count <= 0:
-                        raise RuntimeError("wav invalido")
-                except Exception as exc:
-                    raise RuntimeError(f"wav invalido: {exc}")
+                    with os.fdopen(wav_fd, "wb") as wav_fp:
+                        with wave.open(wav_fp, "wb") as wav_file:
+                            wav_file.setnchannels(1)
+                            wav_file.setsampwidth(2)
+                            wav_file.setframerate(voice.config.sample_rate)
+                            
+                            print(f"[TTS] Iniciando síntese com voice.synthesize()...", flush=True)
+                            chunk_count = 0
+                            for chunk in voice.synthesize(text, syn_config):
+                                chunk_count += 1
+                                wav_file.writeframes(chunk.audio_int16_bytes)
+                            
+                            print(f"[TTS] Síntese completa: {chunk_count} chunks escritos", flush=True)
+
+                    try:
+                        wav_size = os.path.getsize(wav_path)
+                    except OSError:
+                        wav_size = 0
+                    print(f"[TTS] Áudio WAV gravado em arquivo temporário: {wav_size} bytes", flush=True)
+
+                    # Valida o arquivo gerado sem carregá-lo inteiro em RAM.
+                    try:
+                        with wave.open(wav_path, "rb") as wav_check:
+                            channels = wav_check.getnchannels()
+                            sample_width = wav_check.getsampwidth()
+                            frame_rate = wav_check.getframerate()
+                            frame_count = wav_check.getnframes()
+                        
+                        if channels <= 0 or sample_width <= 0 or frame_rate <= 0 or frame_count <= 0:
+                            raise RuntimeError("wav invalido")
+                    except Exception as exc:
+                        raise RuntimeError(f"wav invalido: {exc}")
+                except Exception:
+                    _delete_tts_audio_file(wav_path)
+                    raise
 
                 print(f"[TTS] Piper selecionado: {os.path.basename(model_path)}", flush=True)
                 end_time = time.time()
                 print(f"[TTS] Síntese concluída (engine=piper) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
                 
                 # Armazena em cache
-                if add_to_tts_cache(cache_id, wav_bytes, "piper"):
+                if add_to_tts_cache(cache_id, wav_path, "piper"):
                     start_tts_cache_monitor()
+                else:
+                    _delete_tts_audio_file(wav_path)
                 # mark last-used voice
                 TTS_LAST_VOICE["piper"] = os.path.basename(model_path)
                 return cache_id, "piper"
@@ -958,23 +1032,33 @@ def generate_tts_audio(tts_text, tts_lang):
 
     lang = normalize_backend_tts_lang(tts_lang)
     
+    _ensure_tts_audio_temp_dir()
+    mp3_fd, mp3_path = tempfile.mkstemp(prefix=f"tts-{cache_id[:8]}-", suffix=".mp3", dir=TTS_AUDIO_TEMP_DIR)
     try:
-        mp3_buffer = io.BytesIO()
-        gtts_class(text=text, lang=lang).write_to_fp(mp3_buffer)
-        mp3_bytes = mp3_buffer.getvalue()
+        with os.fdopen(mp3_fd, "wb") as mp3_fp:
+            gtts_class(text=text, lang=lang).write_to_fp(mp3_fp)
     except Exception as exc:
+        _delete_tts_audio_file(mp3_path)
         try:
             print(f"[TTS] Falha ao gerar audio com fallback legacy ({lang}): {exc}", flush=True)
         except:
             pass
         return "", ""
 
+    try:
+        mp3_size = os.path.getsize(mp3_path)
+    except OSError:
+        mp3_size = 0
+    print(f"[TTS] Áudio MP3 gravado em arquivo temporário: {mp3_size} bytes", flush=True)
+
     end_time = time.time()
     print(f"[TTS] Síntese concluída (engine=gtts) tempo={(end_time - start_time):.3f}s cache_id={cache_id[:8]}...", flush=True)
     
     # Armazena em cache
-    if add_to_tts_cache(cache_id, mp3_bytes, "gtts"):
+    if add_to_tts_cache(cache_id, mp3_path, "gtts"):
         start_tts_cache_monitor()
+    else:
+        _delete_tts_audio_file(mp3_path)
     return cache_id, "gtts"
 
 def attach_backend_tts_audio(event_payload):
@@ -2160,7 +2244,7 @@ def obs_powerup_audio_plol_ogg():
 
 @app.route("/mp3/tts-cache/<cache_id>", methods=["GET"])
 def serve_tts_audio(cache_id):
-    """Serve TTS audio from in-memory cache"""
+    """Serve TTS audio from the temporary-file cache"""
     deadline = time.time() + TTS_AUDIO_PENDING_WAIT_SECONDS
 
     while True:
@@ -2171,11 +2255,13 @@ def serve_tts_audio(cache_id):
             print(f"[TTS-SERVE] Audio não encontrado ou expirado: {cache_id[:8]}...", flush=True)
             return Response("Audio expired or not found", status=404)
 
-        audio_bytes, engine, timestamp = entry
+        audio_path, engine, timestamp = entry
         age = time.time() - timestamp
         if age > TTS_AUDIO_CACHE_TTL_SECONDS:
             with TTS_AUDIO_CACHE_LOCK:
-                TTS_AUDIO_CACHE.pop(cache_id, None)
+                expired_entry = TTS_AUDIO_CACHE.pop(cache_id, None)
+            if expired_entry:
+                _delete_tts_audio_file(expired_entry[0])
             print(f"[TTS-SERVE] Audio expirado antes de servir: {cache_id[:8]}... (age={age:.1f}s)", flush=True)
             return Response("Audio expired or not found", status=404)
 
@@ -2189,7 +2275,9 @@ def serve_tts_audio(cache_id):
 
         if engine == "failed":
             with TTS_AUDIO_CACHE_LOCK:
-                TTS_AUDIO_CACHE.pop(cache_id, None)
+                failed_entry = TTS_AUDIO_CACHE.pop(cache_id, None)
+            if failed_entry:
+                _delete_tts_audio_file(failed_entry[0])
             print(f"[TTS-SERVE] Audio synthesis failed: {cache_id[:8]}...", flush=True)
             return Response("Audio synthesis failed", status=500)
 
@@ -2201,24 +2289,41 @@ def serve_tts_audio(cache_id):
             print(f"[TTS-SERVE] Audio não encontrado ao servir (concurrency): {cache_id[:8]}...", flush=True)
             return Response("Audio expired or not found", status=404)
 
-        audio_bytes, engine, timestamp = entry
+        audio_path, engine, timestamp = entry
         break
 
     # Detecta tipo de arquivo baseado no engine
     mimetype = "audio/mpeg" if engine == "gtts" else "audio/wav"
     extension = ".mp3" if engine == "gtts" else ".wav"
 
-    print(f"[TTS-SERVE] Servindo (one-time): {cache_id[:8]}... ({engine}, {len(audio_bytes)} bytes)", flush=True)
-    return Response(
-        audio_bytes,
-        mimetype=mimetype,
-        headers={
-            "Content-Disposition": f'inline; filename="audio{extension}"',
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0"
-        }
-    )
+    if not audio_path or not os.path.isfile(audio_path):
+        print(f"[TTS-SERVE] Arquivo ausente ao servir: {cache_id[:8]}...", flush=True)
+        return Response("Audio expired or not found", status=404)
+
+    try:
+        size_bytes = os.path.getsize(audio_path)
+    except OSError:
+        size_bytes = 0
+
+    print(f"[TTS-SERVE] Servindo (one-time): {cache_id[:8]}... ({engine}, {size_bytes} bytes)", flush=True)
+
+    def audio_stream():
+        try:
+            with open(audio_path, "rb") as audio_file:
+                while True:
+                    chunk = audio_file.read(8192)
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            _delete_tts_audio_file(audio_path)
+
+    response = Response(stream_with_context(audio_stream()), mimetype=mimetype)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["Content-Disposition"] = f'inline; filename="audio{extension}"'
+    return response
 
 @app.route("/mp3/<path:filename>", methods=["GET"])
 def mp3_assets(filename):
