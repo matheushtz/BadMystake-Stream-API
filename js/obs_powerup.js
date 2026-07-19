@@ -13,6 +13,9 @@ var stateUrl = "/twitch/powerup/state";
 var pollIntervalMs = 2000; // was 600
 var lastSeq = null;
 
+var heartbeatUrl = "/heartbeat";
+var heartbeatIntervalMs = 30000;
+
 var REWARD_AUDIO_MAP = {
     "death-increment": "/ogg/morreu.ogg",
     "death-decrement": "/ogg/morreu.ogg",
@@ -585,10 +588,20 @@ async function lista() {
     }
 }
 
+async function sendHeartbeat() {
+    try {
+        await fetch(heartbeatUrl, { method: "POST", cache: "no-store" });
+    } catch (error) {
+        console.log("[OBS] Erro no heartbeat:", error);
+    }
+}
+
 function iniciar() {
     warmupTtsEngine();
     setInterval(pollState, pollIntervalMs);
     pollState();
+    setInterval(sendHeartbeat, heartbeatIntervalMs);
+    sendHeartbeat();
     lista();
 }
 

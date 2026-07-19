@@ -45,6 +45,10 @@ def get_synthesis_config():
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+from activity_manager import activity_manager
+
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 JSON_DIR = os.path.join(PROJECT_ROOT, "json")
 HTML_DIR = os.path.join(PROJECT_ROOT, "html")
@@ -243,6 +247,12 @@ def get_tts_cache_stats():
         }
 
 def enqueue_tts_synthesis(cache_id, text, tts_lang):
+    if not activity_manager.is_active():
+        print(f"[TTS] Sintese ignorada (ActivityManager IDLE): {cache_id[:8]}...", flush=True)
+        with TTS_AUDIO_CACHE_LOCK:
+            TTS_AUDIO_CACHE[cache_id] = (b"", "failed", time.time(), None)
+        return False
+
     # Ensure workers are running
     start_tts_workers()
     job = {"cache_id": cache_id, "text": text, "tts_lang": tts_lang}
@@ -1579,7 +1589,13 @@ def get_twitch_app_access_token(client_id, client_secret):
         payload = json.loads(response.read().decode("utf-8"))
         return payload.get("access_token")
 
-def create_twitch_eventsub_subscription(base_url):
+TWITCH_EVENTSUB_SUBSCRIPTION_TYPES = [
+    {"type": "channel.channel_points_custom_reward_redemption.add", "version": "1"},
+    {"type": "stream.online", "version": "1"},
+    {"type": "stream.offline", "version": "1"},
+]
+
+def create_twitch_eventsub_subscription(base_url, event_type, version="1"):
     client_id = twitch_client_id()
     client_secret = twitch_client_secret()
     channel_id = (os.environ.get("TWITCH_CHANNEL_ID", "") or "").strip()
@@ -1620,8 +1636,8 @@ def create_twitch_eventsub_subscription(base_url):
 
     callback_url = f"{base_url}/twitch/eventsub"
     body = {
-        "type": "channel.channel_points_custom_reward_redemption.add",
-        "version": "1",
+        "type": event_type,
+        "version": version,
         "condition": {
             "broadcaster_user_id": channel_id,
         },
@@ -1655,6 +1671,14 @@ def create_twitch_eventsub_subscription(base_url):
         return {"ok": False, "error": f"HTTP {http_err.code} - {body_text}"}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+def create_all_twitch_eventsub_subscriptions(base_url):
+    results = {}
+    for subscription in TWITCH_EVENTSUB_SUBSCRIPTION_TYPES:
+        results[subscription["type"]] = create_twitch_eventsub_subscription(
+            base_url, subscription["type"], subscription["version"]
+        )
+    return results
 
 # Função para logar o status das variáveis de ambiente relevantes para a publicação no GitHub
 def log_env_status():
@@ -2186,6 +2210,19 @@ def twitch_eventsub_webhook():
         LAST_EVENT_IDS.add(message_id)
 
     if message_type == "notification":
+        subscription = payload.get("subscription", {}) if isinstance(payload.get("subscription", {}), dict) else {}
+        subscription_type = str(subscription.get("type", "")).strip()
+
+        if subscription_type == "stream.online":
+            activity_manager.set_twitch_live(True)
+            print("[TWITCH] stream.online recebido", flush=True)
+            return {"status": "ok"}, 200
+
+        if subscription_type == "stream.offline":
+            activity_manager.set_twitch_live(False)
+            print("[TWITCH] stream.offline recebido", flush=True)
+            return {"status": "ok"}, 200
+
         event = payload.get("event", {}) if isinstance(payload.get("event", {}), dict) else {}
         reward = event.get("reward", {}) if isinstance(event.get("reward", {}), dict) else {}
         reward_title = str(reward.get("title", "")).strip()
@@ -2227,6 +2264,16 @@ def debug_memory():
     """Return comprehensive backend memory metrics for all API components."""
     return get_all_memory_stats(), 200
 
+# Endpoint chamado periodicamente pelo Browser Source para sinalizar presenca.
+@app.route("/heartbeat", methods=["POST"])
+def receive_heartbeat():
+    activity_manager.record_heartbeat()
+    return {"status": "ok", "activity": activity_manager.get_status()}, 200
+
+@app.route("/debug/activity", methods=["GET"])
+def debug_activity():
+    return activity_manager.get_status(), 200
+
 # Endpoint de teste manual para validar o listener sem depender da Twitch.
 @app.route("/twitch/powerup/test", methods=["GET", "POST"])
 def twitch_powerup_test():
@@ -2249,9 +2296,9 @@ def twitch_eventsub_subscribe():
     if not base_url:
         return {"ok": False, "error": "Defina PUBLIC_BASE_URL no Render (ex: https://sua-api.onrender.com)"}, 400
 
-    result = create_twitch_eventsub_subscription(base_url)
-    status_code = 200 if result.get("ok") else 400
-    return result, status_code
+    results = create_all_twitch_eventsub_subscriptions(base_url)
+    status_code = 200 if all(result.get("ok") for result in results.values()) else 400
+    return {"subscriptions": results}, status_code
 
 # Webpage para OBS: fica escutando estado de power-up e toca o audio quando houver novo trigger.
 @app.route("/obs/powerup", methods=["GET"])
@@ -2442,6 +2489,40 @@ def twitch_powerup_tts_playback():
 @app.route("/mp3/<path:filename>", methods=["GET"])
 def mp3_assets(filename):
     return send_file_no_cache(MP3_DIR, filename)
+
+def seed_initial_twitch_live_state():
+    """Consulta a Helix uma unica vez no boot para saber se a live ja esta
+    online (a instancia pode subir a partir do zero no Cloud Run e perderia
+    o evento stream.online disparado antes dela existir). Depois disso o
+    estado e mantido apenas via EventSub, sem polling continuo."""
+    try:
+        channel_id = (os.environ.get("TWITCH_CHANNEL_ID", "") or "").strip()
+        client_id = twitch_client_id()
+        if not channel_id or not client_id:
+            return
+
+        access_token = twitch_access_token()
+        if not access_token:
+            return
+
+        url = f"https://api.twitch.tv/helix/streams?user_id={parse.quote(channel_id)}"
+        req = urllib_request.Request(
+            url,
+            headers={
+                "Client-Id": client_id,
+                "Authorization": f"Bearer {access_token}",
+            },
+        )
+        with urllib_request.urlopen(req, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        is_live = bool(payload.get("data"))
+        activity_manager.set_twitch_live(is_live)
+        print(f"[ACTIVITY] Estado inicial da live: {'ONLINE' if is_live else 'OFFLINE'}", flush=True)
+    except Exception as exc:
+        print(f"[ACTIVITY] Falha ao checar estado inicial da live: {exc}", flush=True)
+
+seed_initial_twitch_live_state()
 
 if __name__ == "__main__":
     log_env_status()
