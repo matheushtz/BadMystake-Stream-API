@@ -9,12 +9,21 @@ var activeAudioPath = null;
 
 var listaPedidos = [];
 var stateUrl = "/twitch/powerup/state";
-// Poll interval in milliseconds. Increase to reduce CPU/network and lower backlog risk.
-var pollIntervalMs = 2000; // was 600
 var lastSeq = null;
 
 var heartbeatUrl = "/heartbeat";
-var heartbeatIntervalMs = 30000;
+
+// Enquanto ACTIVE (live + heartbeat ok), polling rapido normal.
+// Enquanto IDLE, o polling de state fica totalmente parado (nao ha reward pra
+// tocar se ninguem esta assistindo) e o heartbeat vira o unico request,
+// bem mais espacado -- ele e o que "acorda" o overlay quando a live volta.
+var POLL_INTERVAL_ACTIVE_MS = 2000;
+var HEARTBEAT_INTERVAL_ACTIVE_MS = 30000;
+var HEARTBEAT_INTERVAL_IDLE_MS = 90000;
+
+var activityState = "ACTIVE"; // otimista ate o primeiro heartbeat confirmar
+var pollTimerId = null;
+var heartbeatTimerId = null;
 
 var REWARD_AUDIO_MAP = {
     "death-increment": "/ogg/morreu.ogg",
@@ -590,17 +599,65 @@ async function lista() {
 
 async function sendHeartbeat() {
     try {
-        await fetch(heartbeatUrl, { method: "POST", cache: "no-store" });
+        var response = await fetch(heartbeatUrl, { method: "POST", cache: "no-store" });
+        if (!response.ok) {
+            return;
+        }
+
+        var data = await response.json();
+        var newState = data && data.activity && data.activity.state;
+        applyActivityState(newState);
     } catch (error) {
         console.log("[OBS] Erro no heartbeat:", error);
     }
 }
 
+function schedulePolling() {
+    if (pollTimerId) {
+        clearInterval(pollTimerId);
+        pollTimerId = null;
+    }
+
+    if (activityState !== "ACTIVE") {
+        // IDLE: nao ha motivo pra checar reward/TTS se ninguem esta assistindo.
+        return;
+    }
+
+    pollTimerId = setInterval(pollState, POLL_INTERVAL_ACTIVE_MS);
+}
+
+function scheduleHeartbeat() {
+    if (heartbeatTimerId) {
+        clearInterval(heartbeatTimerId);
+    }
+
+    var interval = activityState === "ACTIVE" ? HEARTBEAT_INTERVAL_ACTIVE_MS : HEARTBEAT_INTERVAL_IDLE_MS;
+    heartbeatTimerId = setInterval(sendHeartbeat, interval);
+}
+
+function applyActivityState(newState) {
+    if (!newState || newState === activityState) {
+        return;
+    }
+
+    var wasActive = activityState === "ACTIVE";
+    activityState = newState;
+    console.log("[OBS] Activity state mudou para:", activityState);
+
+    schedulePolling();
+    scheduleHeartbeat();
+
+    if (activityState === "ACTIVE" && !wasActive) {
+        // Acordou do IDLE: busca imediatamente qualquer coisa perdida durante a pausa.
+        pollState();
+    }
+}
+
 function iniciar() {
     warmupTtsEngine();
-    setInterval(pollState, pollIntervalMs);
+    schedulePolling();
     pollState();
-    setInterval(sendHeartbeat, heartbeatIntervalMs);
+    scheduleHeartbeat();
     sendHeartbeat();
     lista();
 }

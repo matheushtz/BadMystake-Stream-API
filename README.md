@@ -17,6 +17,34 @@ Esta aplicacao foi pensada para rodar no host do Render.
 4. Retorna informacoes de progresso de conquistas da Steam para o jogo atual da live.
 5. Expoe rotas de health check para manter o servico online no Render.
 
+## Gerenciador de Atividade (ACTIVE/IDLE)
+
+A API fica ociosa boa parte do tempo (sem live no ar), entao existe um `ActivityManager` central (`py/activity_manager.py`) que decide quando vale a pena rodar trabalho de fundo, para economizar CPU/requisicoes no Cloud Run.
+
+A aplicacao fica em um de dois estados:
+
+- **ACTIVE**: live da Twitch online **e** o Browser Source do OBS mandando heartbeat recente (menos de 60s).
+- **IDLE**: qualquer uma das duas condicoes acima deixa de ser verdadeira.
+
+Como cada sinal chega:
+
+1. **Live online/offline**: via Twitch EventSub (`stream.online` / `stream.offline`), sem nenhum polling continuo na Twitch so para checar se a live esta no ar. No boot da instancia, a API faz **uma unica** checagem na Helix (`GET /helix/streams`) para descobrir se a live ja estava online antes da instancia subir (necessario porque o Cloud Run escala a zero e perderia o evento disparado antes de existir).
+2. **Browser Source conectado**: a pagina `/obs/powerup` manda um `POST /heartbeat` a cada 30 segundos. Se o heartbeat parar de chegar por mais de 60s, o estado volta pra `IDLE` automaticamente (sem loop continuo rodando em segundo plano pra checar isso).
+
+O que hoje depende do estado `ACTIVE`:
+
+- Inicializacao do worker pool de sintese TTS e do monitor de cache TTS (`enqueue_tts_synthesis`). Se um reward TTS for resgatado com a API em `IDLE`, a sintese e ignorada (ninguem estaria ouvindo mesmo, ja que o Browser Source nao esta conectado).
+
+Endpoints:
+
+- `POST /heartbeat`
+	- Chamado pelo overlay do OBS para sinalizar presenca. Retorna o estado atual do ActivityManager.
+
+- `GET /debug/activity`
+	- Retorna o estado atual (`state`, `twitch_live`, `heartbeat_recent`, `last_heartbeat_at`) para depuracao.
+
+Como o EventSub agora tambem assina `stream.online`/`stream.offline` (alem do reward de channel points), rode `POST /twitch/eventsub/subscribe` novamente apos o deploy para registrar as novas assinaturas.
+
 ## Twitch Power-ups & Rewards
 
 Integracao finalizada com resgate de power-up na Twitch e feedback sonoro na stream.
@@ -478,10 +506,51 @@ Isso permite manter o historico por jogo e usar a mesma base para futuras expans
 4. Teste manual com `/twitch/powerup/test?text=Mensagem+de+teste`.
 5. Ao ocorrer um novo resgate na Twitch, a pagina deve tocar o audio gerado para TTS (ou audio mapeado quando nao for TTS).
 
+## Dashboard do Streamer (Subscribers)
+
+Dashboard web para visualizar os subscribers do canal na Twitch, sem precisar de Postman ou consultar JSON na mao.
+
+Diferente do resto da API, esse dashboard **nao guarda nada em memoria nem em disco**: a cada acesso, a pagina refaz o fluxo completo de autorizacao da Twitch, busca os subscribers, monta as estatisticas e descarta tudo assim que a resposta e enviada. Isso porque o endpoint `GET /helix/subscriptions` da Twitch exige um **user access token** do proprio broadcaster (diferente do app token ja usado pra EventSub), e o projeto optou por nunca persistir esse token.
+
+Fluxo ao acessar `/twitch/subscribers`:
+
+1. Redireciona para a tela de autorizacao da Twitch (`/twitch/subscribers/authorize`), pedindo o escopo `channel:read:subscriptions`.
+2. Se a conta que autoriza ja aprovou o app antes, a Twitch redireciona de volta sem precisar mostrar a tela de novo (silencioso).
+3. O callback (`/twitch/subscribers/callback`) troca o `code` por um `access_token`, pagina todos os subscribers na Helix, calcula as estatisticas e renderiza o dashboard — token e dados descartados ao fim da requisicao.
+4. Se qualquer etapa falhar (autorizacao negada, token invalido, canal sem Afiliado/Parceiro, variavel faltando), uma pagina de erro amigavel e exibida.
+
+Recursos do dashboard:
+
+- Cards com Total de Subscribers, Tier 1/2/3, Gift Subs, Regular Subs e Gifters Unicos.
+- Tabela com usuario, login, tier, plano, gift/regular, gifter, broadcaster e user ID.
+- Busca instantanea, ordenacao por coluna, filtros por tier e por tipo (gift/regular), paginacao.
+- Exportacao para CSV e para Excel (`.xlsx`, via SheetJS carregado por CDN).
+
+**Configuracao necessaria (alem das variaveis Twitch ja usadas em EventSub):**
+
+- Registrar `{PUBLIC_BASE_URL}/twitch/subscribers/callback` como Redirect URI no painel de desenvolvedor da Twitch, na mesma aplicacao de `TWITCH_DEV_ID`.
+- Quem autorizar precisa estar logado na propria conta do canal (a mesma do `TWITCH_CHANNEL_ID`), senao a Twitch nega acesso aos subscribers desse `broadcaster_id`.
+
+Endpoints:
+
+- `GET /twitch/subscribers`
+	- Ponto de entrada do dashboard, redireciona para o fluxo de autorizacao.
+
+- `GET /twitch/subscribers/authorize`
+	- Monta a URL de autorizacao da Twitch e redireciona.
+
+- `GET /twitch/subscribers/callback`
+	- Recebe o retorno da Twitch, troca o codigo por token, busca os subscribers e renderiza o dashboard (ou a pagina de erro).
+
 ## Arquivos principais
 
 - `app.py`: API principal.
 - `dados.json`: arquivo com os dados por jogo.
+- `py/activity_manager.py`: estado ACTIVE/IDLE que controla quando trabalho de fundo pode rodar.
+- `py/twitch_oauth.py`: fluxo de Authorization Code da Twitch (usado pelo dashboard de subscribers).
+- `py/twitch_subscribers_service.py`: consulta paginada aos subscribers na Helix.
+- `py/subscribers_stats.py`: calculo das estatisticas exibidas no dashboard.
+- `py/templates/`: templates Jinja2 usados pelo dashboard de subscribers.
 - `obs_browser_refresh.lua`: script para ser adicionado dentro do proprio OBS (Tools > Scripts) e forcar o refresh da Browser Source.
 - `obs_powerup.html`: webpage para Browser Source que escuta trigger de power-up e toca audio.
 

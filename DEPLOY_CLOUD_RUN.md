@@ -45,13 +45,13 @@ gcloud artifacts repositories list --location=southamerica-east1
 ### Buildar uma nova imagem com tag nova
 
 ```powershell
-gcloud builds submit --tag southamerica-east1-docker.pkg.dev/stream-badmystake/cloud-run-source-deploy/streambadmystake:v3-memory .
+gcloud builds submit --tag southamerica-east1-docker.pkg.dev/stream-badmystake/cloud-run-source-deploy/streambadmystake:v4-act-man .
 ```
 
 ### Publicar a nova imagem no Cloud Run
 
 ```powershell
-gcloud run deploy streambadmystake --image southamerica-east1-docker.pkg.dev/stream-badmystake/cloud-run-source-deploy/streambadmystake:v3-memory --region southamerica-east1 --platform managed
+gcloud run deploy streambadmystake --image southamerica-east1-docker.pkg.dev/stream-badmystake/cloud-run-source-deploy/streambadmystake:v4-act-man --region southamerica-east1 --platform managed
 ```
 
 ### Ver logs do servico depois do deploy
