@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subscribers &mdash; {{ channel_name }}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/subscribers.css">
+</head>
+<body>
+  <div id="loadingOverlay" class="loading-overlay">
+    <div class="spinner"></div>
+    <div class="loading-text">Montando o dashboard...</div>
+  </div>
+
+  <div class="page">
+    <header class="page-header">
+      <div class="header-main">
+        <div class="header-badge">TW</div>
+        <div>
+          <h1>Subscribers &mdash; {{ channel_name }}</h1>
+          <p class="header-meta">broadcaster_id: {{ broadcaster_id }} &nbsp;&middot;&nbsp; atualizado em {{ generated_at }} &nbsp;&middot;&nbsp; gerado em {{ elapsed_ms }} ms</p>
+        </div>
+      </div>
+      <a class="btn-refresh" href="/twitch/subscribers">Atualizar</a>
+    </header>
+
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-val">{{ stats.total }}</div>
+        <div class="stat-lbl">Total Subscribers</div>
+      </div>
+      <div class="stat-card accent-tier1">
+        <div class="stat-val">{{ stats.tier1 }}</div>
+        <div class="stat-lbl">Tier 1</div>
+      </div>
+      <div class="stat-card accent-tier2">
+        <div class="stat-val">{{ stats.tier2 }}</div>
+        <div class="stat-lbl">Tier 2</div>
+      </div>
+      <div class="stat-card accent-tier3">
+        <div class="stat-val">{{ stats.tier3 }}</div>
+        <div class="stat-lbl">Tier 3</div>
+      </div>
+      <div class="stat-card accent-gift">
+        <div class="stat-val">{{ stats.gifted }}</div>
+        <div class="stat-lbl">Gift Subs</div>
+      </div>
+      <div class="stat-card accent-regular">
+        <div class="stat-val">{{ stats.regular }}</div>
+        <div class="stat-lbl">Regular Subs</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val">{{ stats.unique_gifters }}</div>
+        <div class="stat-lbl">Gifters Unicos</div>
+      </div>
+    </section>
+
+    <section class="toolbar">
+      <input id="searchInput" class="search-input" type="text" placeholder="Pesquisar por usuario, login ou gifter...">
+      <select id="tierFilter" class="filter-select">
+        <option value="">Todos os tiers</option>
+        <option value="1000">Tier 1</option>
+        <option value="2000">Tier 2</option>
+        <option value="3000">Tier 3</option>
+      </select>
+      <select id="typeFilter" class="filter-select">
+        <option value="">Gift + Regular</option>
+        <option value="gift">Somente Gift</option>
+        <option value="regular">Somente Regular</option>
+      </select>
+      <select id="pageSizeSelect" class="filter-select">
+        <option value="25">25 / pagina</option>
+        <option value="50">50 / pagina</option>
+        <option value="100">100 / pagina</option>
+        <option value="0">Todos</option>
+      </select>
+      <div class="toolbar-spacer"></div>
+      <button id="exportCsvBtn" class="btn-export" type="button">Exportar CSV</button>
+      <button id="exportXlsxBtn" class="btn-export btn-export-xlsx" type="button">Exportar Excel</button>
+    </section>
+
+    <section class="table-wrap">
+      <table id="subscribersTable">
+        <thead>
+          <tr>
+            <th data-key="row_number" data-type="number">#</th>
+            <th data-key="user_name" data-type="string">Usuario</th>
+            <th data-key="tier" data-type="string">Tier</th>
+            <th data-key="plan_name" data-type="string">Plano</th>
+            <th data-key="is_gift" data-type="bool">Gift?</th>
+            <th data-key="gifter_name" data-type="string">Gifted By</th>
+            <th data-key="broadcaster_name" data-type="string">Broadcaster</th>
+            <th data-key="user_id" data-type="string">User ID</th>
+          </tr>
+        </thead>
+        <tbody id="subscribersBody"></tbody>
+      </table>
+      <p id="emptyState" class="empty-state hidden">Nenhum subscriber encontrado para os filtros atuais.</p>
+    </section>
+
+    <footer class="pagination-bar">
+      <span id="paginationSummary" class="pagination-summary"></span>
+      <div class="pagination-controls">
+        <button id="prevPageBtn" class="btn-page" type="button">&laquo; Anterior</button>
+        <span id="pageIndicator" class="page-indicator"></span>
+        <button id="nextPageBtn" class="btn-page" type="button">Proxima &raquo;</button>
+      </div>
+    </footer>
+  </div>
+
+  <script type="application/json" id="subscribers-data">{{ subscribers | tojson }}</script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="/js/subscribers.js"></script>
+</body>
+</html>

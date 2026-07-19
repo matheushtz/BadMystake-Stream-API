@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, send_from_directory, send_file, stream_with_context
+from flask import Flask, request, Response, send_from_directory, send_file, stream_with_context, render_template, redirect
 import base64
 import importlib
 import hashlib
@@ -42,12 +42,18 @@ def get_synthesis_config():
     except ImportError:
         return None
 
-app = Flask(__name__)
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# O modulo e carregado via importlib.util.spec_from_file_location (ver app.py na raiz)
+# sem ser registrado em sys.modules, entao Flask(__name__) nao consegue inferir o
+# root_path sozinho: precisamos apontar template_folder explicitamente.
+app = Flask(__name__, template_folder=os.path.join(BASE_DIR, "templates"))
+
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 from activity_manager import activity_manager
+from twitch_oauth import build_authorize_url, verify_state, exchange_code_for_token
+from twitch_subscribers_service import fetch_all_subscribers
+from subscribers_stats import compute_subscriber_stats
 
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 JSON_DIR = os.path.join(PROJECT_ROOT, "json")
@@ -2299,6 +2305,99 @@ def twitch_eventsub_subscribe():
     results = create_all_twitch_eventsub_subscriptions(base_url)
     status_code = 200 if all(result.get("ok") for result in results.values()) else 400
     return {"subscriptions": results}, status_code
+
+def render_subscribers_error(message):
+    return render_template("subscribers_error.html", message=message), 400
+
+def get_missing_subscribers_config(client_id, client_secret, channel_id, base_url):
+    missing = []
+    if not client_id:
+        missing.append("TWITCH_DEV_ID/TWITCH_CLIENT_ID")
+    if not client_secret:
+        missing.append("TWITCH_SECRET/TWITCH_CLIENT_SECRET")
+    if not channel_id:
+        missing.append("TWITCH_CHANNEL_ID")
+    if not base_url:
+        missing.append("PUBLIC_BASE_URL")
+    return missing
+
+# Dashboard de subscribers: dispara o fluxo de autorizacao a cada acesso (nada e persistido).
+@app.route("/twitch/subscribers", methods=["GET"])
+def twitch_subscribers_dashboard():
+    return redirect("/twitch/subscribers/authorize")
+
+@app.route("/twitch/subscribers/authorize", methods=["GET"])
+def twitch_subscribers_authorize():
+    client_id = twitch_client_id()
+    client_secret = twitch_client_secret()
+    channel_id = (os.environ.get("TWITCH_CHANNEL_ID", "") or "").strip()
+    base_url = get_public_base_url()
+
+    missing = get_missing_subscribers_config(client_id, client_secret, channel_id, base_url)
+    if missing:
+        return render_subscribers_error("Configure as variaveis: " + ", ".join(missing))
+
+    redirect_uri = f"{base_url}/twitch/subscribers/callback"
+    return redirect(build_authorize_url(client_id, client_secret, redirect_uri))
+
+@app.route("/twitch/subscribers/callback", methods=["GET"])
+def twitch_subscribers_callback():
+    start_time = time.time()
+
+    error_description = request.args.get("error_description") or request.args.get("error")
+    if error_description:
+        return render_subscribers_error(f"Autorizacao negada pela Twitch: {error_description}")
+
+    client_id = twitch_client_id()
+    client_secret = twitch_client_secret()
+    channel_id = (os.environ.get("TWITCH_CHANNEL_ID", "") or "").strip()
+    base_url = get_public_base_url()
+
+    missing = get_missing_subscribers_config(client_id, client_secret, channel_id, base_url)
+    if missing:
+        return render_subscribers_error("Configure as variaveis: " + ", ".join(missing))
+
+    state = request.args.get("state", "")
+    if not verify_state(client_secret, state):
+        return render_subscribers_error("Solicitacao invalida ou expirada. Tente novamente.")
+
+    code = request.args.get("code", "")
+    if not code:
+        return render_subscribers_error("A Twitch nao retornou um codigo de autorizacao.")
+
+    redirect_uri = f"{base_url}/twitch/subscribers/callback"
+    token_result = exchange_code_for_token(client_id, client_secret, code, redirect_uri)
+    if not token_result.get("ok"):
+        return render_subscribers_error(token_result.get("error"))
+
+    access_token = token_result["access_token"]
+
+    subs_result = fetch_all_subscribers(access_token, client_id, channel_id)
+    if not subs_result.get("ok"):
+        return render_subscribers_error(subs_result.get("error"))
+
+    subscribers = subs_result["subscribers"]
+    stats = compute_subscriber_stats(subscribers)
+    elapsed_ms = int((time.time() - start_time) * 1000)
+    channel_name = subscribers[0].get("broadcaster_name") if subscribers else channel_id
+
+    return render_template(
+        "subscribers.html",
+        channel_name=channel_name,
+        broadcaster_id=channel_id,
+        generated_at=datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M:%S UTC"),
+        elapsed_ms=elapsed_ms,
+        stats=stats,
+        subscribers=subscribers,
+    )
+
+@app.route("/css/subscribers.css", methods=["GET"])
+def subscribers_styles():
+    return send_file_no_cache(CSS_DIR, "subscribers.css")
+
+@app.route("/js/subscribers.js", methods=["GET"])
+def subscribers_script():
+    return send_file_no_cache(JS_DIR, "subscribers.js")
 
 # Webpage para OBS: fica escutando estado de power-up e toca o audio quando houver novo trigger.
 @app.route("/obs/powerup", methods=["GET"])
