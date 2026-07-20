@@ -1488,6 +1488,27 @@ def get_current_game_from_twitch():
     
     return None
 
+LAST_KNOWN_GAME = {"game_name": None}
+LAST_KNOWN_GAME_LOCK = threading.Lock()
+
+def get_current_game_cached():
+    """Retorna o jogo atual da Twitch, evitando chamadas de rede enquanto a
+    API esta IDLE (stream offline / sem heartbeat do Browser Source).
+    Em ACTIVE, busca ao vivo e atualiza o ultimo jogo conhecido. Em IDLE,
+    devolve o ultimo jogo conhecido sem consultar a Twitch."""
+    if not activity_manager.is_active():
+        with LAST_KNOWN_GAME_LOCK:
+            return LAST_KNOWN_GAME["game_name"]
+
+    game_name = get_current_game_from_twitch()
+    if game_name:
+        with LAST_KNOWN_GAME_LOCK:
+            LAST_KNOWN_GAME["game_name"] = game_name
+        return game_name
+
+    with LAST_KNOWN_GAME_LOCK:
+        return LAST_KNOWN_GAME["game_name"]
+
 def is_valid_twitch_timestamp(timestamp_raw):
     if not timestamp_raw:
         return False
@@ -1940,7 +1961,7 @@ def decrement_deaths_in_file():
 
 # Lê o valor atual de mortes do jogo atual do arquivo, tentando garantir que seja um inteiro. Se não for possível, retorna 0.
 def get_mortes_value(data):
-    game_name = get_current_game_from_twitch()
+    game_name = get_current_game_cached()
     if not game_name:
         game_name = "unknown"
     
@@ -2061,7 +2082,7 @@ def decrement():
 # Endpoint para obter informações do jogo atual
 @app.route("/death/current-game", methods=["GET"])
 def get_current_game():
-    game_name = get_current_game_from_twitch()
+    game_name = get_current_game_cached()
     if not game_name:
         game_name = "unknown"
     
@@ -2143,7 +2164,7 @@ def steam_achievements():
 # Endpoint para a stream: retorna apenas o nome do jogo atual.
 @app.route("/stream/current-game", methods=["GET"])
 def get_stream_current_game():
-    game_name = get_current_game_from_twitch()
+    game_name = get_current_game_cached()
     if not game_name:
         game_name = "unknown"
 
@@ -2163,7 +2184,46 @@ def get_all_deaths():
 # Endpoint raiz para verificar se a API está respondendo
 @app.route("/", methods=["GET", "HEAD"])
 def root():
-    return "OK", 200
+    activity_status = activity_manager.get_status()
+    uptime_seconds = max(0, int(os.times().elapsed) - APP_BOOT_TIME)
+
+    state = activity_status["state"]
+    state_color = "#2ecc71" if state == "ACTIVE" else "#95a5a6"
+
+    def badge(ok, true_label, false_label):
+        color = "#2ecc71" if ok else "#e74c3c"
+        label = true_label if ok else false_label
+        return f'<span style="color:{color};font-weight:600">{label}</span>'
+
+    html = f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>API Status</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; background:#111; color:#eee; padding:2rem; }}
+  .card {{ max-width:420px; margin:0 auto; background:#1b1b1b; border:1px solid #333; border-radius:12px; padding:1.5rem 2rem; }}
+  h1 {{ font-size:1.1rem; margin:0 0 1rem; }}
+  table {{ width:100%; border-collapse:collapse; }}
+  td {{ padding:0.4rem 0; border-bottom:1px solid #2a2a2a; }}
+  td:first-child {{ color:#999; }}
+  td:last-child {{ text-align:right; }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1><span style="color:{state_color}">&#9679;</span> API online</h1>
+    <table>
+      <tr><td>Estado</td><td style="color:{state_color};font-weight:600">{state}</td></tr>
+      <tr><td>Uptime</td><td>{uptime_seconds}s</td></tr>
+      <tr><td>Twitch live</td><td>{badge(activity_status["twitch_live"], "ONLINE", "OFFLINE")}</td></tr>
+      <tr><td>Browser Source</td><td>{badge(activity_status["browser_connected"], "conectado", "sem heartbeat")}</td></tr>
+    </table>
+  </div>
+</body>
+</html>"""
+
+    return Response(html, status=200, mimetype="text/html")
 
 # Endpoint para verificar a saúde da API, incluindo uptime (Defina raiz de Health Status Check como /healthz no Render)
 @app.route("/healthz", methods=["GET"])
