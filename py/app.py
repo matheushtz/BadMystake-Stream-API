@@ -2681,7 +2681,27 @@ def seed_initial_twitch_live_state():
     except Exception as exc:
         print(f"[ACTIVITY] Falha ao checar estado inicial da live: {exc}", flush=True)
 
+def ensure_twitch_eventsub_subscriptions():
+    """Reinscreve as subscriptions do EventSub a cada boot (ou seja, a cada
+    deploy no Cloud Run), para nao depender de chamar /twitch/eventsub/subscribe
+    manualmente apos publicar uma nova revisao. Subscriptions ja existentes
+    retornam 409 da Twitch e sao ignoradas."""
+    base_url = get_public_base_url()
+    if not base_url:
+        print("[TWITCH] PUBLIC_BASE_URL nao definido, pulando reinscricao automatica do EventSub", flush=True)
+        return
+
+    results = create_all_twitch_eventsub_subscriptions(base_url)
+    for event_type, result in results.items():
+        if result.get("ok"):
+            print(f"[TWITCH] EventSub inscrito: {event_type}", flush=True)
+        elif "409" in str(result.get("error", "")):
+            print(f"[TWITCH] EventSub ja inscrito: {event_type}", flush=True)
+        else:
+            print(f"[TWITCH] Falha ao inscrever EventSub {event_type}: {result.get('error')}", flush=True)
+
 seed_initial_twitch_live_state()
+ensure_twitch_eventsub_subscriptions()
 
 if __name__ == "__main__":
     log_env_status()
